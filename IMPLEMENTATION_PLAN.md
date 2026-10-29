@@ -97,56 +97,94 @@ Compaction and reclustering must never be reported as logical row changes.
 
 ## 4. Repository baseline
 
-Baseline reviewed on 2026-10-06 against upstream commit
-`f2409e9f5eaff1c643985013d927e17fdf16e6ec` (fast-forwarded from
-`db4f6091850814b83989721afe12aa9e4406d6b3`, 215 upstream commits):
+Baseline refreshed on 2026-10-28 against upstream commit
+`beba39c8d`:
 
-- workspace version `0.10.1`, MSRV Rust `1.95`, and selected lint toolchain
-  `nightly-2026-04-16`; DataFusion is no longer a workspace dependency;
-- `SnapshotProducer`, `SnapshotProduceOperation`, manifest-list writing,
-  snapshot summaries, and retrying `Transaction::commit` remain present;
-- `FastAppendAction` remains the only data-file-mutating transaction action;
-  removed-entry handling in `transaction/snapshot.rs` remains a TODO;
-- retries reload metadata and replay ordered actions against staged table state,
-  collecting each action's requirements; preparation/publication separation,
-  shared-base requirement compilation, and unknown-outcome recovery still need
-  implementation;
-- `cow_rewrite::CowRewriteBuilder` now plans, reads visible rows, and writes
-  replacement data files, returning old/new file sets without committing.
-  It preserves source partition values/spec and planned-snapshot schema, and
-  does not apply a sort order. Reuse this primitive rather than building a
-  second core rewrite executor; its presence does not complete overwrite,
-  compaction, delete reconciliation, or conflict validation;
-- equality-delete and position-delete writers, including `PositionDeleteInput`,
-  already exist. Extend their validation and transaction integration;
-- v3 deletion-vector reading and row-lineage scan metadata have advanced.
-  Reader support does not establish correct v3 mutation or rewrite support;
-- `ExpireSnapshotsAction` remains metadata-only; physical cleanup is future work;
-- `docs/rfcs/0003_stateful_transaction.md` is a **draft** stateful-action RFC,
-  not an implemented lifecycle. Align A's action-state ownership with it while
-  retaining this plan's publication, recovery, and reference guarantees;
-- upstream removed `crates/integrations/datafusion`, its playground, and
-  `crates/sqllogictest` in `a1de3a10f` after migration. DataFusion milestones
-  are companion-repository work, not current workspace implementation targets;
-- the disposable S3-compatible integration fixture now uses RustFS and
-  `ICEBERG_TEST_OBJECT_STORE_ENDPOINT`, replacing RustFS-specific configuration.
+- workspace version `0.10.1`, MSRV Rust `1.95`, lint toolchain
+  `nightly-2026-04-16`; DataFusion remains outside this workspace;
+- stateful `TransactionAction` and retry-persistent `SimpleSnapshotProducer`
+  are implemented. The RFC is no longer only a proposal, but terminal cleanup
+  and commit-outcome classification remain incomplete;
+- snapshot helpers now live in `transaction/snapshot/mod.rs` and
+  `snapshot/simple.rs`. They support explicit removed-file summaries and
+  manifest entry rewriting. The old `SnapshotProduceOperation` no longer exists;
+- `CowRewriteBuilder` already writes replacement files without publishing.
+  It preserves source partition/spec and planned-snapshot schema, without
+  repartitioning or applying a sort order;
+- equality/position-delete writers, deletion-vector reading, and v3 lineage
+  readers exist. These do not establish safe v3 rewrite publication;
+- snapshot expiration remains metadata-only, and physical cleanup is deferred;
+- the object-store fixture uses RustFS and
+  `ICEBERG_TEST_OBJECT_STORE_ENDPOINT`.
 
-Core entry points are `crates/iceberg/src/transaction/`,
-`crates/iceberg/src/cow_rewrite/`, `crates/iceberg/src/catalog/mod.rs`, and
-`crates/iceberg/src/writer/base_writer/`. Former DataFusion source paths below
-are migration references only; resolve their current equivalents before work.
+### Fork delivery priority: usable COW rewrite first
 
-### Upstream sync decisions
+The owner has explicitly prioritized the shortest tested path to rewriting
+files over completing A–D as broad frameworks first. The narrow vertical slice
+below supersedes Section 13's implementation order. The remaining milestones
+are the longer-term backlog, not prerequisites for the supported initial mode.
+Never open an upstream PR. During upstream sync conflicts, prefer upstream code
+and readjust fork changes afterward, even when substantial rework is required.
 
-Keep the core roadmap and compatibility invariants. No milestone is marked
-complete by this source review. Reuse the upstream COW and delete-writer
-primitives, and review their limits with the exact row/sequence fixtures below.
-A–F and core H–M remain actionable here. G, K, and DataFusion portions of H–J
-are deferred to the migrated integration repository until its location, pinned
-Iceberg dependency, and validation commands are recorded. Do not restore the
-removed integration crates solely to satisfy this plan. Core milestone exits
-must identify companion checks that remain pending; the whole roadmap is not
-complete until those checks pass too.
+1. Add `Transaction::overwrite_files()` consuming explicit removed/added data
+   files from a COW rewrite planned against the same table. Start with main,
+   format v2, no live delete files, and an unchanged metadata planning base.
+2. Validate all source descriptors against live entries, reject duplicate and
+   overlapping input/output paths, and group outputs by their known partition
+   spec. Rewrite touched manifests, retain unaffected manifests, preserve
+   survivor/deleted-entry identities and sequences, and inherit new output
+   sequence numbers at commit.
+3. Publish standard overwrite snapshots, or delete snapshots when no rows/files
+   remain in the replacement. Never label logical updates as physical `replace`.
+   Caller-owned replacement files remain immutable and are never cleaned up
+   automatically; no-op COW results should skip the transaction.
+4. Test real Parquet COW publication through a catalog, exact rows including
+   duplicates and untouched rows, retained historical contents, source liveness,
+   sequence inheritance, stale-base rejection, and unsupported format/delete
+   rejection. Keep the existing append and transaction suites passing.
+5. Next add a distinct `RewriteDataFiles` action for content-preserving physical
+   compaction. Require row-equivalent output and explicit data-sequence policy;
+   matching record counts alone do not prove equivalence. Repartitioning,
+   reclustering, safe concurrent rebase, applicable-delete reconciliation, and
+   v3 lineage support remain separate follow-up work.
+
+The initial overwrite action does not provide prepare/publish APIs, named-branch
+mutation, lost-response success recovery, bounded metadata streaming, or safe
+physical artifact cleanup. Existing transaction error handling still applies;
+never delete artifacts based only on a failed or ambiguous commit response.
+Any changed planning base requires a fresh rewrite plan rather than automatic
+rebase. Wider multi-action snapshot composition remains gated on shared-base
+catalog requirement compilation in A.
+
+Core entry points are `crates/iceberg/src/transaction/overwrite.rs`,
+`transaction/snapshot/`, `cow_rewrite/`, and the existing manifest writers.
+G, K, and DataFusion portions of H–J remain companion-repository work. Record
+that repository and pinned dependency before implementing those adapters; do
+not restore removed integration crates just to satisfy this roadmap.
+
+### Initial overwrite slice validation (2026-10-28)
+
+Implemented `OverwriteFilesAction` and `Transaction::overwrite_files()` on
+upstream `beba39c8d62810fa101740bb2dbb03ab0d8f07ac`, selected toolchain
+`nightly-2026-04-16`, Cargo.lock Git blob
+`dcd6452de71a284c3b57ee0c90204c3efacad743` (lockfile unchanged).
+
+- `cargo test --locked -p iceberg --lib`: 2,090 passed, one ignored, zero failed.
+  Includes four new overwrite metadata/validation tests and three real-Parquet
+  COW catalog-publication tests. Normal scanner reads verify current rows and
+  the retained prior snapshot; stale metadata plans are rejected.
+- `cargo test --locked -p iceberg --doc --quiet`: 88 passed, 14 ignored,
+  including the new overwrite usage example.
+- `cargo clippy --locked -p iceberg --all-targets -- -D warnings`: passed.
+- Supported publication matrix: main, v2, no live delete files; logical
+  overwrite and source-file deletion. v1/v3 and live deletes are rejected.
+- `cargo fmt --all -- --check`, `make generate-public-api`, and
+  `make check-public-api`: passed. API snapshot review shows only the overwrite
+  action builder and `Transaction::overwrite_files()` added; other crate API
+  snapshots are unchanged. GitHub workflows remain disabled.
+- External Spark/Trino readers, REST/RustFS integration, resource-limit
+  measurements, and full workspace/milestone gates have not run. These are
+  pending evidence, not implied passes. This slice does not complete A–M.
 
 The [Iceberg specification](https://iceberg.apache.org/spec/) governs format
 semantics; the [REST catalog protocol](https://github.com/apache/iceberg/blob/main/open-api/rest-catalog-open-api.yaml)
@@ -158,6 +196,9 @@ revision used by interoperability fixtures when implementation begins.
 - Use the existing `main` branch; no fork branch taxonomy is required.
 - Keep `origin` pointed at this fork and `upstream` pointed at Apache
   `iceberg-rust`.
+- Never create a PR to Apache upstream; this fork is maintained independently.
+- Resolve upstream sync conflicts in favor of upstream code, then adapt fork
+  changes even when substantial rework is necessary.
 - Upstream mergeability is not a constraint, but standard Iceberg compatibility
   is.
 - Do not add release or crate-publishing ceremony until deployment requires it.
@@ -622,7 +663,8 @@ checksums, and complete metrics when the additional I/O is warranted.
 
 ### Dependency and release gates
 
-Deliver A first. Develop B and C together; sequence and capability tests from C
+For the broader roadmap after the narrow rewrite slice in Section 4, deliver A
+first. Develop B and C together; sequence and capability tests from C
 must pass before B is considered complete. D precedes public mutations E/F/H/J;
 G requires E/F and scans supporting every delete type accepted by the operation.
 I follows H and delete-applicability fixtures from C; L follows the applicable
@@ -665,10 +707,10 @@ The validation steps are required future work, not results of this plan review.
 
 #### Implementation details
 
-1. Refactor `transaction/mod.rs`, `action.rs`, and `snapshot.rs` in place.
-   Review the draft stateful-transaction RFC and reuse its distinction between
-   transaction, action-execution, and attempt lifetimes; do not assume its
-   proposed stateful interface has already landed.
+1. Refactor `transaction/mod.rs`, `action.rs`, and `snapshot/mod.rs` in place.
+   Extend the upstream stateful action interface and persistent snapshot
+   producers; preserve transaction, action-execution, and attempt lifetimes.
+   Outcome classification and terminal cleanup remain future work.
    Keep existing action builders and `ApplyTransactionAction` as adapters to
    the new lifecycle. Introduce internal `plan.rs`, `prepare.rs`, and
    `validation.rs` modules only as responsibilities outgrow the existing files.
@@ -738,7 +780,8 @@ The validation steps are required future work, not results of this plan review.
    resolved-file record containing the original manifest, spec ID, snapshot ID,
    and normalized data/file sequence values. Resolve removals from the parent
    snapshot; never trust a caller's replacement descriptor for an existing file.
-2. Extend `SnapshotProduceOperation` and manifest processing in `snapshot.rs`.
+2. Extend the upstream snapshot producer helpers and manifest processing in
+   `snapshot/mod.rs`; reuse the existing removed-file summary support.
    Index requested removals by the Section 8.8 comparison key, stream parent
    manifests, and track whether every removal matched exactly one live entry.
    Reject nonexistent removals and duplicate or contradictory additions.
@@ -1633,7 +1676,7 @@ questions:
 
 If any answer is no, move the work to the downstream repository.
 
-## 13. Immediate implementation slices
+## 13. Broader implementation slices after initial COW publication
 
 ### Slice 1: lifecycle refactor only
 

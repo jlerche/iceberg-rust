@@ -66,3 +66,19 @@ When assessing potential vulnerabilities or calibrating automated security
 findings, use [`SECURITY-THREAT-MODEL.md`](SECURITY-THREAT-MODEL.md) as the
 authoritative detailed description of this repository's security boundaries,
 trust assumptions, and non-boundaries.
+
+## Fork development policy
+
+- This is an independent fork. Never open a pull request to Apache upstream.
+- Fetch and merge upstream changes into this fork when requested; push work to
+  `origin` (`jlerche/iceberg-rust`), never to `upstream`.
+- When refreshing from upstream, always resolve code conflicts in favor of
+  upstream code. Adapt or rework fork implementations afterward, even when that
+  requires substantial readjustment. Do not retain conflicting fork code merely
+  to minimize the size of the sync.
+- Work on `main` unless the user requests another branch. Upstream mergeability
+  is not a design constraint; standard Iceberg compatibility remains required.
+- Keep GitHub Actions disabled and run relevant validation locally.
+- Prefer the smallest tested vertical slice that makes file rewrites usable.
+  Reuse upstream COW, manifest, and transaction primitives rather than building
+  speculative frameworks before a working mutation path.

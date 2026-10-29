@@ -55,6 +55,7 @@ mod action;
 pub use action::*;
 mod append;
 mod expire_snapshots;
+mod overwrite;
 mod snapshot;
 mod sort_order;
 mod update_location;
@@ -75,6 +76,7 @@ use crate::table::Table;
 use crate::transaction::action::TransactionActionEntry;
 pub use crate::transaction::append::FastAppendAction;
 pub use crate::transaction::expire_snapshots::ExpireSnapshotsAction;
+pub use crate::transaction::overwrite::OverwriteFilesAction;
 pub use crate::transaction::sort_order::ReplaceSortOrderAction;
 pub use crate::transaction::update_location::UpdateLocationAction;
 pub use crate::transaction::update_properties::UpdatePropertiesAction;
@@ -128,6 +130,15 @@ impl Transaction {
         existing_requirements.extend(requirements);
 
         Ok(updated_table)
+    }
+
+    /// Replaces explicit data files planned against this table's current state.
+    ///
+    /// Initially supports v2 tables without live delete files, on main only.
+    /// Any change to the planning base requires a fresh plan. See
+    /// [`OverwriteFilesAction`] for the supported mutation semantics.
+    pub fn overwrite_files(&self) -> OverwriteFilesAction {
+        OverwriteFilesAction::new(&self.table)
     }
 
     /// Sets table to a new version.

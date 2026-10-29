@@ -484,7 +484,7 @@ mod tests {
 
     use crate::cow_rewrite::{CowBatchRewrite, CowBatchRewriter, CowRewriteBuilder};
     use crate::io::LocalFsStorageFactory;
-    use crate::memory::{MEMORY_CATALOG_WAREHOUSE, MemoryCatalogBuilder};
+    use crate::memory::{MEMORY_CATALOG_WAREHOUSE, MemoryCatalog, MemoryCatalogBuilder};
     use crate::scan::{FileScanTask, FileScanTaskStream};
     use crate::spec::{
         DataFile, Literal, NestedField, PrimitiveType, Schema, Struct, TableProperties, Transform,
@@ -570,6 +570,7 @@ mod tests {
     }
 
     struct CowRewriteFixture {
+        catalog: MemoryCatalog,
         _temp_dir: TempDir,
         table: Table,
     }
@@ -624,6 +625,7 @@ mod tests {
         let table = tx.commit(&catalog).await?;
 
         Ok(CowRewriteFixture {
+            catalog,
             _temp_dir: temp_dir,
             table,
         })
@@ -685,6 +687,7 @@ mod tests {
         let table = tx.commit(&catalog).await?;
 
         Ok(CowRewriteFixture {
+            catalog,
             _temp_dir: temp_dir,
             table,
         })
@@ -748,6 +751,7 @@ mod tests {
         let table = tx.commit(&catalog).await?;
 
         Ok(CowRewriteFixture {
+            catalog,
             _temp_dir: temp_dir,
             table,
         })
@@ -851,6 +855,134 @@ mod tests {
         }
         rows.sort_unstable_by_key(|(id, _)| *id);
         Ok(rows)
+    }
+
+    async fn query_ids(table: &Table, snapshot_id: Option<i64>) -> Result<Vec<i32>> {
+        let mut builder = table.scan();
+        if let Some(snapshot_id) = snapshot_id {
+            builder = builder.snapshot_id(snapshot_id);
+        }
+        let batches: Vec<RecordBatch> = builder.build()?.to_arrow().await?.try_collect().await?;
+        let mut ids = vec![];
+        for batch in batches {
+            let column = batch
+                .column_by_name("id")
+                .unwrap()
+                .as_any()
+                .downcast_ref::<Int32Array>()
+                .unwrap();
+            ids.extend(column.values().iter().copied());
+        }
+        ids.sort_unstable();
+        Ok(ids)
+    }
+
+    async fn live_files(table: &Table) -> Result<Vec<DataFile>> {
+        let snapshot = table.metadata().current_snapshot().unwrap();
+        let manifests = table.manifest_list_reader(snapshot).load().await?;
+        let mut files = vec![];
+        for descriptor in manifests.entries() {
+            let manifest = table.object_cache().get_manifest(descriptor).await?;
+            files.extend(
+                manifest
+                    .entries()
+                    .iter()
+                    .filter(|e| e.is_alive())
+                    .map(|e| e.data_file().clone()),
+            );
+        }
+        Ok(files)
+    }
+
+    #[tokio::test]
+    async fn cow_rewrite_commit_preserves_unmatched_rows_and_history() -> Result<()> {
+        let fixture = test_table_with_ids(vec![1, 2, 2, 3, 4]).await?;
+        let original = live_files(&fixture.table).await?;
+        let old_snapshot = fixture.table.metadata().current_snapshot_id();
+        let result = CowRewriteBuilder::new(&fixture.table)
+            .with_rewriter(Arc::new(DeleteEvenIds))
+            .rewrite()
+            .await?;
+        let tx = Transaction::new(&fixture.table);
+        let tx = tx
+            .overwrite_files()
+            .remove_data_files(result.removed_data_files)
+            .add_data_files(result.added_data_files)
+            .apply(tx)?;
+        let committed = tx.commit(&fixture.catalog).await?;
+        let fresh = fixture.catalog.load_table(committed.identifier()).await?;
+        assert_eq!(read_ids(&fresh, &live_files(&fresh).await?).await?, vec![
+            1, 3
+        ]);
+        assert_eq!(read_ids(&fixture.table, &original).await?, vec![
+            1, 2, 2, 3, 4
+        ]);
+        assert_eq!(query_ids(&fresh, None).await?, vec![1, 3]);
+        assert_eq!(query_ids(&fresh, old_snapshot).await?, vec![1, 2, 2, 3, 4]);
+        let snapshot = fresh.metadata().current_snapshot().unwrap();
+        assert_eq!(snapshot.parent_snapshot_id(), old_snapshot);
+        assert_eq!(
+            snapshot.summary().operation,
+            crate::spec::Operation::Overwrite
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn cow_rewrite_commit_full_file_delete() -> Result<()> {
+        let fixture = test_table_with_ids(vec![2, 2, 4]).await?;
+        let result = CowRewriteBuilder::new(&fixture.table)
+            .with_rewriter(Arc::new(DeleteEvenIds))
+            .rewrite()
+            .await?;
+        assert!(result.added_data_files.is_empty());
+        let tx = Transaction::new(&fixture.table);
+        let tx = tx
+            .overwrite_files()
+            .remove_data_files(result.removed_data_files)
+            .apply(tx)?;
+        let table = tx.commit(&fixture.catalog).await?;
+        assert!(live_files(&table).await?.is_empty());
+        assert!(query_ids(&table, None).await?.is_empty());
+        assert_eq!(
+            table
+                .metadata()
+                .current_snapshot()
+                .unwrap()
+                .summary()
+                .operation,
+            crate::spec::Operation::Delete
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn cow_rewrite_commit_rejects_stale_plan() -> Result<()> {
+        let fixture = test_table_with_ids(vec![1, 2, 3, 4]).await?;
+        let result = CowRewriteBuilder::new(&fixture.table)
+            .with_rewriter(Arc::new(DeleteEvenIds))
+            .rewrite()
+            .await?;
+        let tx = Transaction::new(&fixture.table);
+        let stale = tx
+            .overwrite_files()
+            .remove_data_files(result.removed_data_files)
+            .add_data_files(result.added_data_files)
+            .apply(tx)?;
+        let tx = Transaction::new(&fixture.table);
+        let tx = tx
+            .update_table_properties()
+            .set("test.concurrent".to_string(), "true".to_string())
+            .apply(tx)?;
+        let concurrent = tx.commit(&fixture.catalog).await?;
+        let err = stale.commit(&fixture.catalog).await.unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::PreconditionFailed);
+        let fresh = fixture.catalog.load_table(concurrent.identifier()).await?;
+        assert_eq!(fresh.metadata(), concurrent.metadata());
+        assert_eq!(read_ids(&fresh, &live_files(&fresh).await?).await?, vec![
+            1, 2, 3, 4
+        ]);
+        Ok(())
     }
 
     #[tokio::test]
@@ -1350,6 +1482,7 @@ mod tests {
         let table = tx.commit(&catalog).await?;
 
         Ok(CowRewriteFixture {
+            catalog,
             _temp_dir: temp_dir,
             table,
         })
