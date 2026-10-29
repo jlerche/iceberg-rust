@@ -142,11 +142,14 @@ and readjust fork changes afterward, even when substantial rework is required.
    duplicates and untouched rows, retained historical contents, source liveness,
    sequence inheritance, stale-base rejection, and unsupported format/delete
    rejection. Keep the existing append and transaction suites passing.
-5. Next add a distinct `RewriteDataFiles` action for content-preserving physical
-   compaction. Require row-equivalent output and explicit data-sequence policy;
-   matching record counts alone do not prove equivalence. Repartitioning,
-   reclustering, safe concurrent rebase, applicable-delete reconciliation, and
-   v3 lineage support remain separate follow-up work.
+5. The initial `RewriteDataFilesAction` now compacts all data files in an
+   unpartitioned v2 table without live deletes, using the existing Parquet
+   writer and a standard `replace` snapshot. It owns row-preserving execution
+   rather than accepting caller-transformed output. Outputs inherit the minimum
+   input data sequence number and receive new file sequence numbers. A changed
+   planning base requires replanning. Repartitioning, reclustering, selected-file
+   groups, safe concurrent rebase, applicable-delete reconciliation, and v3
+   lineage support remain follow-up work.
 
 The initial overwrite action does not provide prepare/publish APIs, named-branch
 mutation, lost-response success recovery, bounded metadata streaming, or safe
@@ -185,6 +188,52 @@ upstream `beba39c8d62810fa101740bb2dbb03ab0d8f07ac`, selected toolchain
 - External Spark/Trino readers, REST/RustFS integration, resource-limit
   measurements, and full workspace/milestone gates have not run. These are
   pending evidence, not implied passes. This slice does not complete A–M.
+
+### Initial compaction slice (2026-10-29)
+
+`Transaction::rewrite_data_files().apply(tx)?.commit(catalog).await` streams all
+rows through the existing replacement writer without a transformation callback.
+The default partition spec must have no fields and every live data file must
+use it. Any live delete file is rejected before output writing. Empty and
+single-file tables create no snapshot. The existing target file size controls
+output rolling; reducing file count is not guaranteed for arbitrary input sizes.
+
+The action checks source, scanned, and output record totals with checked
+arithmetic. Actual row preservation comes from forwarding complete batches
+unchanged, not from equal record counts. Retry state reuses completed output
+files. Publication shares the overwrite manifest kernel, but uses `replace`
+and the minimum source data sequence number; new file sequence numbers are
+assigned at commit. Source files and uncertain-outcome artifacts are retained.
+
+End-to-end tests use real Parquet and the memory catalog over local storage:
+multiple source snapshots compact to one file with duplicate rows, nulls, empty
+and nonempty strings preserved. Normal scans verify current contents and the
+prior snapshot. Further cases cover no-op tables, concurrent append rejection,
+unsupported tables, live deletes, inconsistent record counts without publication,
+and output-file reuse between publication attempts. Partitioned/v1/v3 mutation,
+external-reader interoperability, and REST/RustFS checks remain outside this slice.
+
+The fork quality gate (`make check-fork-lints`) uses pgderive's Clippy thresholds
+and restriction policy for the new compaction module and its tests. The imported
+1,000 physical-line checker applies only to the explicit fork-owned file list
+in `dev/fork-lints/modules.txt`; upstream modules are excluded. Existing workspace
+Clippy checks keep their normal configuration. New fork modules must opt into
+the strict policy and be added to the file-length list.
+
+Validation for this slice used parent commit `28467d638`, selected toolchain
+`nightly-2026-04-16`, and unchanged Cargo.lock blob
+`dcd6452de71a284c3b57ee0c90204c3efacad743`:
+
+- `cargo test --locked -p iceberg --lib --quiet`: 2,097 passed, one ignored;
+  includes seven new compaction tests.
+- `cargo test --locked -p iceberg --doc --quiet`: 89 passed, 14 ignored.
+- `cargo clippy --locked -p iceberg --all-targets --all-features -- -D warnings`:
+  passed with the upstream/default configuration.
+- `make check-fork-lints`: passed; stricter Clippy, formatting, ten checker
+  self-tests, and all three fork-owned Rust files below 1,000 lines.
+- `make generate-public-api` and `make check-public-api`: passed; only the
+  intended compaction action and transaction entry point appear in the API diff.
+- Full workspace gates and external-engine/REST/RustFS validation remain pending.
 
 The [Iceberg specification](https://iceberg.apache.org/spec/) governs format
 semantics; the [REST catalog protocol](https://github.com/apache/iceberg/blob/main/open-api/rest-catalog-open-api.yaml)

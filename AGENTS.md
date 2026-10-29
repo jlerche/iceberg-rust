@@ -82,3 +82,26 @@ trust assumptions, and non-boundaries.
 - Prefer the smallest tested vertical slice that makes file rewrites usable.
   Reuse upstream COW, manifest, and transaction primitives rather than building
   speculative frameworks before a working mutation path.
+
+## Fork Rust quality gate
+
+Use pgderive's Clippy policy for new fork modules: deny `all`, `pedantic`, and
+`nursery`, plus its restriction lints; use the thresholds in
+`dev/fork-lints/clippy.toml`.
+Use checked conversions and small functions, and fix findings rather than
+silencing them. Narrow exceptions require `#[expect(lint, reason = "...")]`.
+Run `make check-fork-lints` for the stricter fork-module gate. It is also part
+of `make check`. Opt new
+fork modules into the policy with module-level deny attributes, as in
+`transaction/rewrite_data_files.rs`; they also cover child test modules.
+The script leaves upstream modules at their existing lint policy. It suppresses
+three globally enabled threshold lints on the command line; source-level denies
+re-enable them inside fork modules. Keep normal workspace lint checks separate,
+using their default configuration. Do not add broad upstream lint exemptions.
+
+Apply pgderive's 1,000 physical-line Rust file limit only to the fork-owned
+modules listed in `dev/fork-lints/modules.txt`. Register new fork-owned modules
+and their test files there; shared/upstream modules remain outside that gate.
+The imported checker supports a justified `// pgderive: max-lines=N -- reason`
+within the first ten lines. Prefer splitting a fork module over an exception.
+The checker defaults to that fork-owned list, including when run directly.

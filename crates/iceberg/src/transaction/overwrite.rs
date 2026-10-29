@@ -82,6 +82,7 @@ pub struct OverwriteFilesAction {
     base: TableMetadataRef,
     removed: Vec<DataFile>,
     added: Vec<DataFile>,
+    rewrite_sequence_number: Option<i64>,
 }
 
 impl OverwriteFilesAction {
@@ -90,6 +91,14 @@ impl OverwriteFilesAction {
             base: table.metadata_ref(),
             removed: vec![],
             added: vec![],
+            rewrite_sequence_number: None,
+        }
+    }
+
+    pub(super) fn for_rewrite(table: &Table, sequence_number: i64) -> Self {
+        Self {
+            rewrite_sequence_number: Some(sequence_number),
+            ..Self::new(table)
         }
     }
 
@@ -257,6 +266,7 @@ impl TransactionAction for OverwriteFilesAction {
                 writer.add_entry(
                     ManifestEntry::builder()
                         .status(ManifestStatus::Added)
+                        .sequence_number_opt(self.rewrite_sequence_number)
                         .data_file(file.clone())
                         .build(),
                 )?;
@@ -268,7 +278,9 @@ impl TransactionAction for OverwriteFilesAction {
         let mut result = write_snapshot_commit(table, SnapshotCommitInput {
             snapshot_id,
             manifest_list_path: path,
-            operation: if self.added.is_empty() {
+            operation: if self.rewrite_sequence_number.is_some() {
+                Operation::Replace
+            } else if self.added.is_empty() {
                 Operation::Delete
             } else {
                 Operation::Overwrite

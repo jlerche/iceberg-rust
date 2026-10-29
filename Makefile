@@ -23,6 +23,9 @@ build:
 check-fmt:
 	cargo fmt --all -- --check
 
+check-fork-lints:
+	bash dev/check_fork_lints.sh
+
 check-clippy:
 	cargo clippy --all-targets --all-features --workspace -- -D warnings
 
@@ -99,7 +102,7 @@ install-cargo-deny:
 check-dependency-licenses: install-cargo-deny
 	python3 ./dev/release/licenses.py dependencies check
 
-check: check-fmt check-clippy check-doc check-toml cargo-machete check-license-notice check-dependency-licenses
+check: check-fork-lints check-fmt check-clippy check-doc check-toml cargo-machete check-license-notice check-dependency-licenses
 
 doc-test:
 	cargo test --no-fail-fast --doc --all-features --workspace
