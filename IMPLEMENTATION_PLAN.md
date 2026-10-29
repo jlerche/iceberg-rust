@@ -194,6 +194,17 @@ G, K, and DataFusion portions of H–J remain companion-repository work. Record
 that repository and pinned dependency before implementing those adapters; do
 not restore removed integration crates just to satisfy this roadmap.
 
+### Immediate adoption priority
+
+The caller-controlled rewrite path is available for initial downstream adoption.
+A self-contained runnable example now covers selection, execution, standard
+commit handoff, explicit re-preparation after definitive conflict, and conservative
+handling of unknown outcomes. Run it with
+`cargo run --locked -p iceberg-examples --example caller-controlled-compaction`.
+External Postgres coordination stays with the downstream adapter.
+External-reader validation and broader maintenance features remain follow-ups,
+not prerequisites for trying the supported path in `icestream`.
+
 ### Caller-controlled compaction contract (2026-10-29)
 
 The primary flow is now:
@@ -2154,3 +2165,39 @@ Cargo.lock:
 Default core Clippy, API generation, and `make check-public-api` passed; all
 public API snapshots remain unchanged. External-reader interoperability and
 full-workspace milestone checks remain pending.
+
+
+## Runnable caller-controlled compaction example (2026-10-29)
+
+The `caller-controlled-compaction` example in `crates/examples` demonstrates the
+supported public path using a local disposable warehouse, an in-memory catalog,
+and real Parquet files. It selects explicit live descriptors, preserves an
+unselected file, executes without catalog publication, refreshes and prepares,
+and transfers a standard commit through the checked handoff.
+
+The conflict case appends after preparation, observes a definitive failed
+requirement, then re-prepares the same executed result against the refreshed
+append-only descendant. The unknown-outcome case simulates a lost response after
+a real catalog success. It retains artifacts without resubmission when a stale
+read cannot establish the outcome, then recognizes the exact prepared snapshot
+on retained main ancestry after another append. This does not add automatic
+recovery, a durable receipt format, transport fault injection, or external
+transaction coordination.
+
+The example prints the identity/base/snapshot/artifact information a caller must
+retain before handoff. Its in-memory receipt and catalog are explicitly not
+restart recovery. The demo warehouse is retained on success and failure; its
+README explains inspection and manual disposal, definitive conflict versus
+uncertain error handling, and downstream adapter responsibilities.
+
+Validation from parent `94492dd7b` uses the pinned toolchain. The example's
+three scenarios passed, and an independent reviewer separately ran the locked
+command with all assertions passing and reported no actionable findings.
+Cargo.lock adds four example dev-dependency edges to existing workspace packages;
+no dependency versions change. No core library code or API changes are included.
+
+Default Clippy and `make check-fork-lints` passed, including formatting, ten
+checker self-tests, and the 1,000-line limit for all twenty-two registered
+fork-owned files. API generation and `make check-public-api` passed with all
+public API snapshots unchanged. External-reader interoperability and
+full-workspace checks remain open.

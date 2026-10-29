@@ -3064,11 +3064,15 @@ dependencies = [
 name = "iceberg-examples"
 version = "0.10.1"
 dependencies = [
+ "arrow-array",
+ "arrow-schema",
  "futures",
  "iceberg",
  "iceberg-catalog-rest",
  "iceberg-storage-opendal",
+ "tempfile",
  "tokio",
+ "uuid",
 ]
 
 [[package]]

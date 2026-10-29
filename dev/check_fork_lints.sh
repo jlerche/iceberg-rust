@@ -28,3 +28,6 @@ CLIPPY_CONF_DIR="$PWD/dev/fork-lints" cargo clippy --locked -p iceberg --all-tar
 
 CLIPPY_CONF_DIR="$PWD/dev/fork-lints" cargo clippy --locked -p iceberg-integration-tests --test rewrite_compaction_test -- \
     -D warnings -A clippy::too_many_arguments -A clippy::type_complexity -A clippy::excessive_nesting
+
+CLIPPY_CONF_DIR="$PWD/dev/fork-lints" cargo clippy --locked -p iceberg-examples --example caller-controlled-compaction -- \
+    -D warnings -A clippy::too_many_arguments -A clippy::type_complexity -A clippy::excessive_nesting

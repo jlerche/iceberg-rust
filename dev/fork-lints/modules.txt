@@ -17,3 +17,6 @@ crates/integration_tests/tests/rewrite_compaction/lifecycle.rs
 crates/integration_tests/tests/rewrite_compaction/failures.rs
 crates/iceberg/src/transaction/rewrite_data_files/validation.rs
 crates/iceberg/src/transaction/rewrite_data_files/tests/rebase.rs
+crates/examples/src/caller_controlled_compaction.rs
+crates/examples/src/compaction/demo.rs
+crates/examples/src/compaction/recovery.rs
