@@ -35,7 +35,10 @@ if an expected outcome does not hold. Its three scenarios demonstrate:
 
 1. Select two live file descriptors, execute without publishing, refresh the
    table, prepare snapshot metadata, and transfer the standard `TableCommit`
-   with `try_into_table_commit()`. An unselected file remains live.
+   with `try_into_table_commit()`. An unselected file remains live. Admission
+   limits cap the selected set at two files and 64 MiB of source data. These
+   limits include singleton groups and do not bound metadata scanning or cache
+   memory; configure them for the caller's job budget.
 2. Append after preparation, observe a definitive catalog requirement conflict,
    reload the table, and explicitly prepare the completed result again. The
    appended rows survive and the data outputs are reused. This example's

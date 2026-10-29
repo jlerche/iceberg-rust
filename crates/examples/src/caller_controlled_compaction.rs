@@ -69,6 +69,7 @@ async fn execute_selected(demo: &Demo, name: &str) -> Result<(Table, RewriteData
     let plan = Transaction::new(&base)
         .rewrite_data_files()
         .select_data_files(selected)
+        .with_plan_limits(2, 64 * 1024 * 1024)?
         .plan()
         .await?;
     let inventory = plan.artifacts();

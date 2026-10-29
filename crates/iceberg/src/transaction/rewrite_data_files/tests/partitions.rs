@@ -493,3 +493,43 @@ async fn compound_partition_values_are_grouped_by_the_complete_tuple() -> Result
     );
     Ok(())
 }
+
+#[tokio::test]
+async fn total_plan_limits_span_partition_groups_and_singletons() -> Result<()> {
+    let fixture = seed_groups().await?;
+    let files = live_entries(&fixture.table).await?;
+    let bytes = files
+        .iter()
+        .map(|entry| entry.data_file().file_size_in_bytes())
+        .sum::<u64>();
+    let action = Transaction::new(&fixture.table).rewrite_data_files();
+    let plan = action.clone().with_plan_limits(7, bytes)?.plan().await?;
+    assert_eq!(
+        plan.groups()
+            .iter()
+            .map(|group| group.input_files().len())
+            .collect::<Vec<_>>(),
+        vec![2, 2, 2, 1]
+    );
+    assert!(plan.artifacts().paths().is_empty());
+    let data = super::controlled::fixture_files(&fixture.table, "data")?;
+    let metadata = super::controlled::fixture_files(&fixture.table, "metadata")?;
+    for (count, size) in [(6, bytes), (7, bytes - 1)] {
+        let error = action
+            .clone()
+            .with_plan_limits(count, size)?
+            .plan()
+            .await
+            .err()
+            .ok_or_else(missing)?;
+        assert_eq!(error.kind(), ErrorKind::DataInvalid);
+    }
+    assert_eq!(
+        (
+            super::controlled::fixture_files(&fixture.table, "data")?,
+            super::controlled::fixture_files(&fixture.table, "metadata")?
+        ),
+        (data, metadata)
+    );
+    Ok(())
+}

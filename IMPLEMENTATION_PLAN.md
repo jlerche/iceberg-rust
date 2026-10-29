@@ -203,7 +203,8 @@ handling of unknown outcomes. Run it with
 `cargo run --locked -p iceberg-examples --example caller-controlled-compaction`.
 External Postgres coordination stays with the downstream adapter.
 External-reader validation and broader maintenance features remain follow-ups,
-not prerequisites for trying the supported path in `icestream`.
+not prerequisites for trying the supported path in `icestream`. Total-plan
+admission limits for selected file count and source bytes are implemented.
 
 ### Caller-controlled compaction contract (2026-10-29)
 
@@ -211,6 +212,7 @@ The primary flow is now:
 
 ```text
 RewriteDataFilesAction::select_data_files(...)  (optional; defaults to all files)
+    -> with_plan_limits(...)   (optional; total selected-file/source-byte budget)
     -> plan()                  pinned table, exact live inputs, source data age
     -> RewriteDataFilesPlan::execute()
                                writes immutable Parquet outputs only
@@ -286,7 +288,9 @@ two files and a positive byte limit; an individual oversized source is rejected
 before execution. Singleton remainders stay live. Each subgroup recalculates its
 minimum source sequence number. Limits describe source descriptors, not output
 file size, decoded batch memory, or the entire plan's descriptor inventory.
-Cancellation and staged-artifact inventories remain separate work.
+Cooperative cancellation and staged-artifact inventories are implemented.
+Total selected-file/source-byte admission limits are available separately through
+`RewriteDataFilesAction::with_plan_limits`; metadata inventory is not memory-bounded.
 
 Publication preserves each group's minimum data sequence number on every output,
 assigns new file sequence numbers, and computes added-file summaries using each
@@ -298,7 +302,7 @@ End-to-end coverage includes multiple partitions, null partition values,
 compound tuples, truncation transforms with distinct original values, selected
 groups, untouched singleton groups, mixed old/new specs with equal tuples,
 per-group sequence inheritance, partition summaries, predicate pruning, complete
-row multisets, and retained historical reads. v1/v3, live deletes, safe rebase,
+row multisets, and retained historical reads. v1/v3, live deletes, general rebase,
 and partition-spec migration are not enabled by this slice.
 
 Partition-slice validation used parent `fda1cf122`, selected toolchain
@@ -1300,11 +1304,12 @@ add explicit supported modes before using it for those operations.
 ### Milestone H: `RewriteDataFiles` without applicable deletes
 
 Core delivery status: caller-selected row-preserving execution, partition/spec
-grouping, optional file/byte group limits, staged preparation/publication,
+grouping, optional per-group limits and total selected-input admission limits,
+staged preparation/publication,
 artifact inventories, cancellation, and explicit revalidation after compatible
 concurrent appends are implemented and tested. REST/RustFS lifecycle coverage is
-implemented. Reclustering, size/bounds/age selection policies, full-plan descriptor
-limits, external-reader validation, and the companion DataFusion work below
+implemented. Reclustering, size/bounds/age selection policies, bounded metadata
+inventory, external-reader validation, and the companion DataFusion work below
 remain open; this does not mark the whole milestone complete.
 
 #### Work
@@ -2201,3 +2206,40 @@ checker self-tests, and the 1,000-line limit for all twenty-two registered
 fork-owned files. API generation and `make check-public-api` passed with all
 public API snapshots unchanged. External-reader interoperability and
 full-workspace checks remain open.
+
+
+## Total-plan compaction admission limits (2026-10-29)
+
+`RewriteDataFilesAction::with_plan_limits(max_files, max_bytes)` adds optional
+admission limits for the entire selected input set, independently of per-group
+splitting. Positive limits are required; file and byte totals at the boundary
+are accepted. Every selected descriptor counts, including singleton groups
+left untouched. Unselected files are excluded. Builder order does not affect
+selection or admission, and the one-call transaction path uses the same checks.
+
+Planning validates selection, then checks total file count and checked source-byte
+arithmetic before constructing groups or writing outputs. Oversized or overflowing
+requests return `DataInvalid`; no files are dropped to fit a budget and no partial
+job is admitted. Omitted limits preserve the existing behavior. These limits
+bound admitted source descriptors and bytes, not metadata scanning/cache memory,
+decoded batch memory, output size, or wall-clock duration. Metadata is loaded
+before admission; bounded metadata inventory remains separate future work.
+
+The runnable example sets a two-file/64 MiB admission budget. Validation from
+parent `b12b55142`, with the pinned toolchain and unchanged Cargo.lock:
+
+- Core library: 2,142 passed, one ignored. Six new tests cover count/byte
+  boundaries, overflow, zero limits, empty/singleton sets, explicit selection and
+  builder order, aggregation across partition groups, unchanged storage/catalog
+  on rejection, and exact rows and history after admission.
+- Documentation: 89 passed, 14 ignored.
+- The locked runnable example passed all three publication/conflict/recovery
+  scenarios with admission limits enabled.
+- Independent review reported no actionable findings and independently ran all
+  six limit regressions and the runnable example successfully.
+
+Default Clippy and `make check-fork-lints` passed, including formatting, ten
+checker self-tests, and all twenty-three registered fork-owned files below 1,000
+lines. API generation and `make check-public-api` passed; the only public API
+addition is the intended action builder method. External-reader validation, bounded
+metadata inventory, and full-workspace milestone checks remain open.

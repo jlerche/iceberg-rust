@@ -24,7 +24,10 @@ fn missing_prepared() -> Error {
     Error::new(ErrorKind::Unexpected, "Expected a prepared rewrite")
 }
 
-fn fixture_files(table: &crate::table::Table, directory: &str) -> Result<Vec<std::path::PathBuf>> {
+pub(super) fn fixture_files(
+    table: &crate::table::Table,
+    directory: &str,
+) -> Result<Vec<std::path::PathBuf>> {
     let location = table
         .metadata()
         .location()

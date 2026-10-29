@@ -90,6 +90,7 @@ use crate::{Error, ErrorKind, Result};
 pub struct RewriteDataFilesAction {
     base: Table,
     selected: Option<Vec<DataFile>>,
+    plan_limits: Option<(usize, u64)>,
 }
 
 impl RewriteDataFilesAction {
@@ -97,6 +98,7 @@ impl RewriteDataFilesAction {
         Self {
             base: table.clone(),
             selected: None,
+            plan_limits: None,
         }
     }
 
@@ -114,15 +116,67 @@ impl RewriteDataFilesAction {
         self
     }
 
+    /// Caps the total selected file count and source bytes admitted by planning.
+    ///
+    /// Counts all selected descriptors, including singleton groups left untouched.
+    /// Limits are independent of group limits and use source file sizes, not
+    /// output size or decoded memory. Metadata is loaded before admission checks;
+    /// these limits do not bound metadata scanning or cache memory.
+    ///
+    /// # Errors
+    /// Rejects zero limits. Planning rejects an oversized selection or byte overflow
+    /// before creating a rewrite plan or writing any output files.
+    pub fn with_plan_limits(mut self, max_files: usize, max_bytes: u64) -> Result<Self> {
+        if max_files == 0 || max_bytes == 0 {
+            return Err(Error::new(
+                ErrorKind::DataInvalid,
+                "Compaction plan limits require nonzero files and bytes",
+            ));
+        }
+        self.plan_limits = Some((max_files, max_bytes));
+        Ok(self)
+    }
+
     /// Resolves the selected inputs without writing files or publishing metadata.
     ///
     /// # Errors
     /// Returns an error for unsupported tables, live deletes, duplicate inputs,
-    /// or selected descriptors that do not match live files.
+    /// selected descriptors that do not match live files, or exceeded plan limits.
     pub async fn plan(&self) -> Result<RewriteDataFilesPlan> {
         let (files, sequence_numbers) = self.inputs(&self.base).await?;
         let files = self.select_inputs(files)?;
+        self.validate_plan_limits(&files)?;
         RewriteDataFilesPlan::new(self.base.clone(), files, &sequence_numbers)
+    }
+
+    fn validate_plan_limits(&self, files: &[DataFile]) -> Result<()> {
+        let Some((max_files, max_bytes)) = self.plan_limits else {
+            return Ok(());
+        };
+        if files.len() > max_files {
+            return Err(Error::new(
+                ErrorKind::DataInvalid,
+                "Selected compaction files exceed the total plan file limit",
+            ));
+        }
+        let mut bytes = 0_u64;
+        for file in files {
+            bytes = bytes
+                .checked_add(file.file_size_in_bytes())
+                .ok_or_else(|| {
+                    Error::new(
+                        ErrorKind::DataInvalid,
+                        "Selected compaction source bytes overflow",
+                    )
+                })?;
+            if bytes > max_bytes {
+                return Err(Error::new(
+                    ErrorKind::DataInvalid,
+                    "Selected compaction source bytes exceed the total plan byte limit",
+                ));
+            }
+        }
+        Ok(())
     }
 
     fn select_inputs(&self, files: Vec<DataFile>) -> Result<Vec<DataFile>> {

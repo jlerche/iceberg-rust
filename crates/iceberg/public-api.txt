@@ -3505,6 +3505,7 @@ impl iceberg::transaction::RewriteDataFilesAction
 pub async fn iceberg::transaction::RewriteDataFilesAction::plan(&self) -> iceberg::Result<iceberg::transaction::RewriteDataFilesPlan>
 pub fn iceberg::transaction::RewriteDataFilesAction::select_data_files(self, files: impl core::iter::traits::collect::IntoIterator<Item = iceberg::spec::DataFile>) -> Self
 pub fn iceberg::transaction::RewriteDataFilesAction::with_cancellation(self, token: iceberg::io::CancellationToken) -> Self
+pub fn iceberg::transaction::RewriteDataFilesAction::with_plan_limits(self, max_files: usize, max_bytes: u64) -> iceberg::Result<Self>
 impl core::clone::Clone for iceberg::transaction::RewriteDataFilesAction
 pub fn iceberg::transaction::RewriteDataFilesAction::clone(&self) -> iceberg::transaction::RewriteDataFilesAction
 pub struct iceberg::transaction::RewriteDataFilesGroup
