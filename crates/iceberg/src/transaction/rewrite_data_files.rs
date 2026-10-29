@@ -110,6 +110,10 @@ impl RewriteDataFilesAction {
     }
 
     /// Restricts compaction to exact live data-file descriptors.
+    ///
+    /// Planning retains descriptors and data sequences only for selected paths,
+    /// while validating every live entry. Duplicate detection still retains all
+    /// live paths; manifest decoding and caching are unchanged.
     #[must_use]
     pub fn select_data_files(mut self, files: impl IntoIterator<Item = DataFile>) -> Self {
         self.selected = Some(files.into_iter().collect());
@@ -206,6 +210,12 @@ impl RewriteDataFilesAction {
                 "Compaction currently requires format v2",
             ));
         }
+        let selected_paths = self.selected.as_ref().map(|files| {
+            files
+                .iter()
+                .map(DataFile::file_path)
+                .collect::<HashSet<_>>()
+        });
         let mut files = vec![];
         let mut sequence_numbers = HashMap::new();
         let mut paths = HashSet::new();
@@ -243,6 +253,12 @@ impl RewriteDataFilesAction {
                         "Compaction input lacks a valid data sequence number",
                     )
                 })?;
+                if selected_paths
+                    .as_ref()
+                    .is_some_and(|selected| !selected.contains(entry.file_path()))
+                {
+                    continue;
+                }
                 sequence_numbers.insert(entry.file_path().to_string(), sequence);
                 files.push(entry.data_file().clone());
             }

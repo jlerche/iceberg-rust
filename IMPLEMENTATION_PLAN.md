@@ -205,6 +205,8 @@ External Postgres coordination stays with the downstream adapter.
 External-reader validation and broader maintenance features remain follow-ups,
 not prerequisites for trying the supported path in `icestream`. Total-plan
 admission limits for selected file count and source bytes are implemented.
+Explicit-selection planning also retains only selected descriptor/sequence
+inventories, while preserving whole-table validation.
 
 ### Caller-controlled compaction contract (2026-10-29)
 
@@ -1305,7 +1307,7 @@ add explicit supported modes before using it for those operations.
 
 Core delivery status: caller-selected row-preserving execution, partition/spec
 grouping, optional per-group limits and total selected-input admission limits,
-staged preparation/publication,
+selected-only descriptor/sequence retention, staged preparation/publication,
 artifact inventories, cancellation, and explicit revalidation after compatible
 concurrent appends are implemented and tested. REST/RustFS lifecycle coverage is
 implemented. Reclustering, size/bounds/age selection policies, bounded metadata
@@ -2243,3 +2245,41 @@ checker self-tests, and all twenty-three registered fork-owned files below 1,000
 lines. API generation and `make check-public-api` passed; the only public API
 addition is the intended action builder method. External-reader validation, bounded
 metadata inventory, and full-workspace milestone checks remain open.
+
+
+## Selected-descriptor planning retention (2026-10-29)
+
+Explicit-selection planning now retains cloned `DataFile`
+descriptors and data-sequence entries only for requested paths. It continues
+scanning every live manifest entry before accepting the selection, including
+entries after all requested files have been found. Whole-table duplicate-path,
+partition/spec, data-sequence, and live-delete checks remain required. Final
+selection validation preserves caller order and rejects duplicate, absent, or
+mismatched descriptors. The default all-files path remains unchanged.
+
+This reduces the additional descriptor/sequence inventory from all live files to
+the selected set. It does not provide hard-bounded metadata memory: duplicate
+detection still retains every live path, the current manifest/list is decoded,
+and the existing shared metadata cache is unchanged. Publication revalidation
+and manifest generation remain table-wide. No generic cache, manifest-reader,
+or publication behavior is changed in this slice.
+
+Validation from parent `254491841`, with the pinned toolchain and unchanged
+Cargo.lock:
+
+- Core library: 2,147 passed, one ignored. Five new tests cover selected-only
+  descriptor/sequence retention, empty/default selection, exact rows/history and
+  survivor identities, unselected duplicates across manifests, late live deletes,
+  and invalid unselected data sequences without output writing.
+- Documentation: 89 passed, 14 ignored.
+- The locked runnable example passed all three publication/conflict/recovery
+  scenarios with explicit selection and admission limits.
+- Independent review reported no actionable findings and independently ran all
+  five new regressions, the existing invalid-selection test, and all eleven
+  cancellation tests successfully.
+
+Default Clippy and `make check-fork-lints` passed, including formatting, ten
+checker self-tests, and the 1,000-line limit for all twenty-four registered
+fork-owned files. API generation and `make check-public-api` passed with no
+public API snapshot changes. Fully bounded metadata inventory,
+external-reader validation, and full-workspace milestone checks remain open.

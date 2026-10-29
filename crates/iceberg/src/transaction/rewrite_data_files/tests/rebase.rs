@@ -213,7 +213,7 @@ async fn incompatible_configuration_and_missing_ancestry_require_replanning() ->
     rejects_without_metadata_outputs(&result, &with_metadata(table, expired)).await
 }
 
-async fn append_manifest(
+pub(super) async fn append_manifest(
     table: &Table,
     entries: Vec<crate::spec::ManifestEntry>,
     content: crate::spec::ManifestContentType,
