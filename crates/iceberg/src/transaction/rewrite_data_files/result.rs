@@ -58,7 +58,7 @@ impl RewriteDataFilesResult {
         self.base.file_io().inventory().unwrap_or_default()
     }
 
-    /// Returns the source files replaced by completed multi-file groups.
+    /// Returns the source files replaced by completed rewrite groups.
     #[must_use]
     pub fn input_files(&self) -> &[DataFile] {
         &self.inputs
@@ -73,7 +73,7 @@ impl RewriteDataFilesResult {
     /// Returns whether execution produced a publishable rewrite.
     #[must_use]
     pub const fn has_changes(&self) -> bool {
-        self.inputs.len() >= 2
+        !self.inputs.is_empty()
     }
 
     /// Writes snapshot metadata and returns a standard commit without publishing.
@@ -82,7 +82,8 @@ impl RewriteDataFilesResult {
     /// catalog. Returns `None` for a validated no-op. The result can also be
     /// applied to a transaction; that path never rewrites data files. Append-only
     /// descendants are accepted when all original files and their data sequences
-    /// remain unchanged and the writer configuration is unchanged.
+    /// remain unchanged, the live delete inventory is unchanged, and the writer
+    /// configuration is unchanged.
     ///
     /// # Errors
     /// Returns an error for incompatible planning-base changes, invalid input

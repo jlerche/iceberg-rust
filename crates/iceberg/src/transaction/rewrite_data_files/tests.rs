@@ -323,7 +323,7 @@ async fn compaction_rejects_unsupported_tables_before_reading_files() -> Result<
 }
 
 #[tokio::test]
-async fn compaction_rejects_live_deletes_before_writing_output() -> Result<()> {
+async fn compaction_rejects_unsupported_deletes_before_writing_output() -> Result<()> {
     use crate::spec::{
         DataContentType, DataFileBuilder, DataFileFormat, ManifestContentType, Struct,
     };
@@ -349,7 +349,7 @@ async fn compaction_rejects_live_deletes_before_writing_output() -> Result<()> {
     let delete = DataFileBuilder::default()
         .content(DataContentType::PositionDeletes)
         .file_path("positions.parquet".to_string())
-        .file_format(DataFileFormat::Parquet)
+        .file_format(DataFileFormat::Puffin)
         .file_size_in_bytes(100)
         .record_count(1)
         .partition_spec_id(0)
@@ -468,3 +468,6 @@ mod rebase;
 mod limits;
 
 mod selection;
+
+mod delete_fixture;
+mod deletes;

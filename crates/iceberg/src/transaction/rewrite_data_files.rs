@@ -38,6 +38,7 @@
     clippy::wildcard_imports
 )]
 
+mod deletes;
 mod group;
 mod plan;
 mod prepared;
@@ -54,16 +55,18 @@ pub use result::RewriteDataFilesResult;
 
 use super::action::CommitStatus;
 use super::overwrite::OverwriteFilesState;
-use super::snapshot::{current_manifests, validate_partition_value};
+use super::snapshot::current_manifests;
 use super::{ActionCommit, TransactionAction};
-use crate::spec::{DataFile, FormatVersion, ManifestContentType};
+use crate::spec::{DataFile, FormatVersion};
 use crate::table::Table;
 use crate::{Error, ErrorKind, Result};
 
 /// Plans row-preserving compaction against a pinned table state.
 ///
-/// Supports main on v2 tables without live delete files. Inputs are grouped by
-/// partition spec and partition value; singleton groups are left untouched.
+/// Supports main on v2 tables, materializing Parquet equality and position
+/// deletes while retaining delete files for untouched sources. Inputs are grouped
+/// by partition spec and value; singleton groups are untouched only when the
+/// table has no live deletes.
 /// Output rolling uses the table's target Parquet file size.
 /// Completed outputs can be prepared against append-only descendants. Other
 /// planning-base changes require replanning. Files are never deleted
@@ -125,7 +128,8 @@ impl RewriteDataFilesAction {
     /// Counts all selected descriptors, including singleton groups left untouched.
     /// Limits are independent of group limits and use source file sizes, not
     /// output size or decoded memory. Metadata is loaded before admission checks;
-    /// these limits do not bound metadata scanning or cache memory.
+    /// these limits do not bound metadata scanning or cache memory. Delete-file
+    /// reads are additional and are not charged to this data-file budget.
     ///
     /// # Errors
     /// Rejects zero limits. Planning rejects an oversized selection or byte overflow
@@ -144,13 +148,18 @@ impl RewriteDataFilesAction {
     /// Resolves the selected inputs without writing files or publishing metadata.
     ///
     /// # Errors
-    /// Returns an error for unsupported tables, live deletes, duplicate inputs,
+    /// Returns an error for unsupported tables or delete formats, duplicate inputs,
     /// selected descriptors that do not match live files, or exceeded plan limits.
     pub async fn plan(&self) -> Result<RewriteDataFilesPlan> {
         let (files, sequence_numbers) = self.inputs(&self.base).await?;
         let files = self.select_inputs(files)?;
         self.validate_plan_limits(&files)?;
-        RewriteDataFilesPlan::new(self.base.clone(), files, &sequence_numbers)
+        RewriteDataFilesPlan::new(
+            self.base.clone(),
+            files,
+            &sequence_numbers,
+            deletes::has_live(&self.base).await?,
+        )
     }
 
     fn validate_plan_limits(&self, files: &[DataFile]) -> Result<()> {
@@ -223,36 +232,11 @@ impl RewriteDataFilesAction {
             self.base.file_io().check_cancellation()?;
             let manifest = table.object_cache().get_manifest(&descriptor).await?;
             for entry in manifest.entries().iter().filter(|entry| entry.is_alive()) {
-                if descriptor.content != ManifestContentType::Data {
-                    return Err(Error::new(
-                        ErrorKind::FeatureUnsupported,
-                        "Compaction with live delete files is not yet supported",
-                    ));
+                let sequence =
+                    deletes::validate_entry(table, entry, descriptor.content, &mut paths)?;
+                if descriptor.content == crate::spec::ManifestContentType::Deletes {
+                    continue;
                 }
-                let file = entry.data_file();
-                let spec = self
-                    .base
-                    .metadata()
-                    .partition_spec_by_id(file.partition_spec_id)
-                    .ok_or_else(|| {
-                        Error::new(ErrorKind::DataInvalid, "Unknown compaction partition spec")
-                    })?;
-                validate_partition_value(
-                    file.partition(),
-                    &spec.partition_type(self.base.metadata().current_schema())?,
-                )?;
-                if !paths.insert(entry.file_path().to_string()) {
-                    return Err(Error::new(
-                        ErrorKind::DataInvalid,
-                        "Duplicate live compaction input path",
-                    ));
-                }
-                let sequence = entry.sequence_number().filter(|n| *n >= 0).ok_or_else(|| {
-                    Error::new(
-                        ErrorKind::DataInvalid,
-                        "Compaction input lacks a valid data sequence number",
-                    )
-                })?;
                 if selected_paths
                     .as_ref()
                     .is_some_and(|selected| !selected.contains(entry.file_path()))

@@ -533,3 +533,73 @@ async fn total_plan_limits_span_partition_groups_and_singletons() -> Result<()> 
     );
     Ok(())
 }
+
+#[tokio::test]
+async fn partitioned_equality_deletes_materialize_without_hiding_newer_values() -> Result<()> {
+    use super::delete_fixture::{equality, publish};
+    let mut fixture = fixture().await?;
+    append(&mut fixture, Some(1), &[row(Some(1), Some("old"))]).await?;
+    let key = PartitionKey::new(
+        fixture
+            .table
+            .metadata()
+            .default_partition_spec()
+            .as_ref()
+            .clone(),
+        fixture.table.metadata().current_schema().clone(),
+        partition(Some(1)),
+    );
+    let deletes = equality(&fixture.table, &[Some(1)], Some(key)).await?;
+    publish(&mut fixture, &deletes, Operation::Delete).await?;
+    append(&mut fixture, Some(1), &[row(Some(1), Some("new"))]).await?;
+    append(&mut fixture, Some(2), &[row(Some(2), Some("untouched"))]).await?;
+    let selected = live_entries(&fixture.table)
+        .await?
+        .into_iter()
+        .filter(|entry| {
+            entry.content_type() == crate::spec::DataContentType::Data
+                && entry.data_file().partition() == &partition(Some(1))
+        })
+        .map(|entry| entry.data_file().clone())
+        .collect::<Vec<_>>();
+    let tx = Transaction::new(&fixture.table);
+    let fresh = tx
+        .rewrite_data_files()
+        .select_data_files(selected)
+        .apply(tx)?
+        .commit(&fixture.catalog)
+        .await?;
+    assert_eq!(read_rows(&fresh, None).await?, vec![
+        row(Some(1), Some("new")),
+        row(Some(2), Some("untouched"))
+    ]);
+    Ok(())
+}
+
+#[tokio::test]
+async fn global_equality_deletes_span_old_and_new_partition_specs() -> Result<()> {
+    use super::delete_fixture::{equality, publish};
+    let mut fixture = Fixture::new().await?;
+    fixture
+        .append(&[row(Some(1), Some("old-unpartitioned"))])
+        .await?;
+    evolve(&mut fixture).await?;
+    append(&mut fixture, Some(1), &[row(
+        Some(1),
+        Some("old-partitioned"),
+    )])
+    .await?;
+    let deletes = equality(&fixture.table, &[Some(1)], None).await?;
+    publish(&mut fixture, &deletes, Operation::Delete).await?;
+    append(&mut fixture, Some(1), &[row(Some(1), Some("new"))]).await?;
+    let expected = vec![row(Some(1), Some("new"))];
+    assert_eq!(read_rows(&fixture.table, None).await?, expected);
+    let tx = Transaction::new(&fixture.table);
+    let fresh = tx
+        .rewrite_data_files()
+        .apply(tx)?
+        .commit(&fixture.catalog)
+        .await?;
+    assert_eq!(read_rows(&fresh, None).await?, expected);
+    Ok(())
+}

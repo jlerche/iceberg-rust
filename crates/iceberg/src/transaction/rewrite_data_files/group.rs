@@ -16,6 +16,8 @@
 // under the License.
 
 use std::collections::HashMap;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use futures::TryStreamExt;
 
@@ -52,7 +54,10 @@ impl RewriteDataFilesGroup {
         self.partition.data()
     }
 
-    /// Returns the minimum input data sequence number inherited by outputs.
+    /// Returns the data sequence number assigned to replacement files.
+    ///
+    /// Uses the execution-base sequence when live deletes are materialized;
+    /// otherwise uses the group's minimum source data sequence.
     #[must_use]
     pub const fn data_sequence_number(&self) -> i64 {
         self.sequence_number
@@ -65,6 +70,14 @@ impl RewriteDataFilesGroup {
     ) -> Result<Vec<DataFile>> {
         table.file_io().check_cancellation()?;
         let expected_rows = row_count(&self.files)?;
+        let applied_deletes = Arc::new(AtomicBool::new(false));
+        let observed_deletes = Arc::clone(&applied_deletes);
+        let tasks = Box::pin(tasks.map_ok(move |task| {
+            if !task.deletes().is_empty() {
+                observed_deletes.store(true, Ordering::Relaxed);
+            }
+            task
+        }));
         let mut batches = table
             .reader_builder()
             .with_data_file_concurrency_limit(1)
@@ -97,7 +110,10 @@ impl RewriteDataFilesGroup {
         table.file_io().check_cancellation()?;
         let outputs = writer.close().await?;
         table.file_io().check_cancellation()?;
-        if rows != expected_rows || row_count(&outputs)? != expected_rows {
+        if rows > expected_rows
+            || row_count(&outputs)? != rows
+            || (rows != expected_rows && !applied_deletes.load(Ordering::Relaxed))
+        {
             return Err(Error::new(
                 ErrorKind::DataInvalid,
                 "Compaction row count does not match source descriptors",

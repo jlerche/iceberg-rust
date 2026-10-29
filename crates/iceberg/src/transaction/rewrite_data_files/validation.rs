@@ -35,6 +35,9 @@ pub(super) async fn validate_publication(base: &Table, table: &Table) -> Result<
         .iter()
         .map(|file| (file.file_path(), file))
         .collect();
+    if super::deletes::inventory(base).await? != super::deletes::inventory(table).await? {
+        return Err(changed());
+    }
     if original.iter().any(|file| {
         current.get(file.file_path()).copied() != Some(file)
             || sequences.get(file.file_path()) != current_sequences.get(file.file_path())

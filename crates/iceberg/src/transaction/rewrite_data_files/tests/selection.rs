@@ -209,13 +209,14 @@ async fn unselected_duplicate_paths_across_manifests_are_rejected() -> Result<()
 }
 
 #[tokio::test]
-async fn live_deletes_after_selected_inputs_are_rejected() -> Result<()> {
+async fn unsupported_deletes_after_selected_inputs_are_rejected() -> Result<()> {
     let fixture = seed().await?;
     let entries = live_entries(&fixture.table).await?;
     let selection = selected(&entries)?;
     let mut delete = entries.last().ok_or_else(missing)?.as_ref().clone();
     delete.data_file.content = DataContentType::PositionDeletes;
-    delete.data_file.file_path = "positions.parquet".to_string();
+    delete.data_file.file_path = "positions.puffin".to_string();
+    delete.data_file.file_format = crate::spec::DataFileFormat::Puffin;
     let table = append_manifest(&fixture.table, vec![delete], ManifestContentType::Deletes).await?;
     let action = Transaction::new(&table)
         .rewrite_data_files()

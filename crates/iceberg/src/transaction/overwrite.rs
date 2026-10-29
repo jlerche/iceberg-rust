@@ -202,7 +202,9 @@ impl TransactionAction for OverwriteFilesAction {
             table.file_io().check_cancellation()?;
             let manifest = table.object_cache().get_manifest(&descriptor).await?;
             if descriptor.content == ManifestContentType::Deletes {
-                if manifest.entries().iter().any(|e| e.is_alive()) {
+                if self.rewrite_sequence_numbers.is_none()
+                    && manifest.entries().iter().any(|e| e.is_alive())
+                {
                     return Err(Error::new(
                         ErrorKind::FeatureUnsupported,
                         "Overwrite with live delete files is not yet supported",

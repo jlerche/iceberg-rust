@@ -226,9 +226,9 @@ RewriteDataFilesAction::select_data_files(...)  (optional; defaults to all files
 ```
 
 Planning reads standard metadata without writing files. Execution performs no
-catalog update and writes no manifests or snapshots. It reads only the selected
-files and forwards their complete rows unchanged. Preparation never rewrites
-data and does not load or update a catalog; the caller supplies a freshly loaded
+catalog update and writes no manifests or snapshots. It reads selected data
+files and applicable delete files, then forwards complete visible rows unchanged.
+Preparation never rewrites data and does not load or update a catalog; the caller supplies a freshly loaded
 table. A no-op produces no prepared commit. The existing one-call transaction
 API remains a convenience wrapper over the same stages, and an executed result
 can be applied to a transaction without repeating data execution.
@@ -242,16 +242,20 @@ A prepublication load alone cannot close a concurrent-publication race: the
 catalog still needs atomic requirements/compare-and-swap enforcement.
 
 The supported matrix is main, v2, known partition specs with partition values
-compatible with the current schema, and no live delete files. Reject duplicate,
+compatible with the current schema, and Parquet equality/position delete files.
+Puffin deletion vectors and non-Parquet deletes remain unsupported. Reject duplicate,
 absent, or mismatched selected source descriptors. Group selected inputs by the
-exact `(partition spec ID, partition value)` pair. Each output inherits its
-group's minimum input data sequence number; singleton groups and unselected
-files remain live with their original descriptors and sequences.
+exact `(partition spec ID, partition value)` pair. Without live deletes, outputs
+inherit the group's minimum input data sequence and singleton groups stay live.
+With live deletes, execution materializes visible rows, including singleton
+groups, and assigns the execution-base last sequence to outputs. All delete
+files remain live for unselected/shared data; unselected data retains its
+original descriptors and sequences.
 A changed table identity, location, schema, partition specs, default sort order,
 or table properties requires replanning. Completed outputs may be prepared against
 a refreshed append-only descendant with retained ancestry, unchanged original
-files and data sequences, and no live deletes. Preparation rebuilds metadata
-against that refreshed head while retaining immutable data outputs. A prepared
+files/data sequences, and an unchanged resolved live delete inventory. Preparation
+rebuilds metadata against that refreshed head while retaining immutable data outputs. A prepared
 commit is pinned to its publication base; subsequent head changes require
 preparation again. General rebasing and multiple-reference publication remain deferred.
 
@@ -273,7 +277,7 @@ logical stream changes.
 ### Partition-aware compaction (2026-10-29)
 
 Plans expose `RewriteDataFilesGroup` values with their exact source descriptors,
-partition spec ID, full partition tuple, and minimum data sequence number. Group
+partition spec ID, full partition tuple, and assigned output data sequence. Group
 order follows the first selected input. Specs are never merged, even when their
 partition tuples compare equal; this also applies to historical specs after a
 default-spec change. All selected tuples are validated before execution.
@@ -282,29 +286,30 @@ Execution streams scan tasks for one group at a time and executes groups
 sequentially with one concurrent data-file reader. This avoids buffering all
 selected scan tasks, at the cost of repeating metadata planning for each group.
 The existing partition-key-aware Parquet writer preserves source partition/spec.
-Singleton groups write nothing and are excluded from removed inputs.
+Singleton groups are skipped only on tables without live deletes. Delete-bearing
+tables rewrite selected singleton groups as well.
 
 `RewriteDataFilesPlan::with_group_limits(max_files, max_bytes)` optionally
 splits each partition/spec group in stable input order. It requires at least
 two files and a positive byte limit; an individual oversized source is rejected
-before execution. Singleton remainders stay live. Each subgroup recalculates its
-minimum source sequence number. Limits describe source descriptors, not output
+before execution. Singleton remainders stay live without deletes. Each subgroup
+uses its minimum source sequence without live deletes, or the fixed execution
+watermark when deletes are materialized. Limits describe source descriptors, not output
 file size, decoded batch memory, or the entire plan's descriptor inventory.
 Cooperative cancellation and staged-artifact inventories are implemented.
 Total selected-file/source-byte admission limits are available separately through
 `RewriteDataFilesAction::with_plan_limits`; metadata inventory is not memory-bounded.
 
-Publication preserves each group's minimum data sequence number on every output,
+Publication preserves the planned output data sequence on every output,
 assigns new file sequence numbers, and computes added-file summaries using each
 file's actual partition spec. The plan/execute/prepare/publish boundary and
-strict planning-base checks remain unchanged. Physical source-file deletion is
-still excluded.
+strict planning-base checks remain unchanged. Physical source-file deletion and automatic delete-file retirement remain excluded.
 
 End-to-end coverage includes multiple partitions, null partition values,
 compound tuples, truncation transforms with distinct original values, selected
 groups, untouched singleton groups, mixed old/new specs with equal tuples,
 per-group sequence inheritance, partition summaries, predicate pruning, complete
-row multisets, and retained historical reads. v1/v3, live deletes, general rebase,
+row multisets, and retained historical reads. v1/v3, delete-file retirement, general rebase,
 and partition-spec migration are not enabled by this slice.
 
 Partition-slice validation used parent `fda1cf122`, selected toolchain
@@ -1305,11 +1310,12 @@ add explicit supported modes before using it for those operations.
 
 ### Milestone H: `RewriteDataFiles` without applicable deletes
 
-Core delivery status: caller-selected row-preserving execution, partition/spec
+Core delivery status: caller-selected visible-row-preserving execution, partition/spec
 grouping, optional per-group limits and total selected-input admission limits,
 selected-only descriptor/sequence retention, staged preparation/publication,
 artifact inventories, cancellation, and explicit revalidation after compatible
-concurrent appends are implemented and tested. REST/RustFS lifecycle coverage is
+concurrent appends are implemented and tested. V2 Parquet equality/position
+delete materialization is implemented; delete retirement remains deferred. REST/RustFS lifecycle coverage is
 implemented. Reclustering, size/bounds/age selection policies, bounded metadata
 inventory, external-reader validation, and the companion DataFusion work below
 remain open; this does not mark the whole milestone complete.
@@ -1356,6 +1362,12 @@ remain open; this does not mark the whole milestone complete.
 - Files with applicable deletes are rejected until Milestone I.
 
 ### Milestone I: `RewriteDataFiles` with delete reconciliation
+
+Delivered core slice: v2 Parquet equality/position delete materialization,
+execution-base sequence watermarks, singleton/all-deleted rewrites, retained
+shared delete files, and exact delete-inventory revalidation. Automatic delete
+retirement, v3/deletion vectors, and external-reader validation remain open.
+The work below describes the broader milestone, not a completed exit gate.
 
 #### Work
 
@@ -2283,3 +2295,51 @@ checker self-tests, and the 1,000-line limit for all twenty-four registered
 fork-owned files. API generation and `make check-public-api` passed with no
 public API snapshot changes. Fully bounded metadata inventory,
 external-reader validation, and full-workspace milestone checks remain open.
+
+
+## V2 live-delete materialization (2026-10-29)
+
+`RewriteDataFiles` now consumes live Parquet equality and position deletes using
+the existing scan/delete readers. It preserves the visible row multiset, retains
+all delete files/manifests for shared and unselected data, and publishes standard `replace` snapshots. This slice does not create key
+semantics or choose Kafka records to delete; downstream writers supply standard
+Iceberg delete files. Generic logical overwrite remains gated against live deletes.
+
+For delete-bearing tables, output data sequences use the execution-base last
+sequence rather than the group's minimum source age. This prevents retained old
+equality deletes from applying to surviving newer rows after mixed-age sources
+are merged. Group splitting and re-preparation must retain that watermark.
+Singleton groups are rewritten on these tables, and completely deleted sources
+may be replaced by no data files. Scanned visible rows must equal output rows;
+source physical counts remain an upper bound when applicable deletes exist.
+
+Append-only revalidation also requires an unchanged resolved live delete
+inventory. Newly introduced, removed, or modified deletes require replanning;
+publication remains pinned and single-shot. v1/v3, Puffin deletion vectors,
+non-Parquet deletes, automatic delete-file retirement/cleanup, and new delete
+publication actions are outside this slice. Admission limits cover selected
+data descriptors/bytes; delete-file I/O and cache usage are additional.
+
+Validation from parent `47e9ade08`, pinned toolchain, and unchanged Cargo.lock:
+
+- Core library: 2,159 passed, one ignored. Twelve new real-Parquet/catalog tests
+  cover mixed-age equality deletes, null keys, split groups and singleton
+  remainders, shared/unselected targets, later deletes after compaction,
+  position/equality deletes together, all-deleted sources, same-commit sequence
+  boundaries, partitioned/global deletes across spec evolution, retained
+  execution watermarks after append, changed delete inventories, and unreadable
+  delete files. Unsupported-delete and generic-overwrite rejection coverage
+  remains in place.
+- Documentation: 89 passed, 14 ignored. The runnable caller-controlled example
+  continues passing all publication/conflict/recovery assertions.
+- Scoped lint gate passed, including formatting, ten checker self-tests, and all
+  twenty-seven registered fork-owned files below 1,000 lines.
+- Two independent reviewers found no correctness issues and independently ran
+  the delete-materialization regressions, partitioned/global-spec cases,
+  same-commit sequence boundary, and generic-overwrite rejection test.
+- Default Clippy, API generation, and `make check-public-api` passed; all public
+  API snapshots remain unchanged.
+
+External readers, REST/RustFS
+live-delete cases, v3/deletion vectors, and automatic delete retirement are not
+validated or delivered by this slice. The full Milestone I exit remains open.

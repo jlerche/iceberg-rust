@@ -32,6 +32,7 @@ pub struct RewriteDataFilesPlan {
     files: Vec<DataFile>,
     groups: Vec<RewriteDataFilesGroup>,
     sequences: HashMap<String, i64>,
+    has_deletes: bool,
 }
 
 impl RewriteDataFilesPlan {
@@ -39,14 +40,30 @@ impl RewriteDataFilesPlan {
         base: Table,
         files: Vec<DataFile>,
         sequences: &HashMap<String, i64>,
+        has_deletes: bool,
     ) -> Result<Self> {
         let base = base.track_outputs(crate::io::ArtifactInventory::default());
-        let groups = group_files(&base, &files, sequences)?;
+        // Materialized equality deletes must not reapply to newer surviving rows.
+        let sequences = sequences
+            .iter()
+            .map(|(path, sequence)| {
+                (
+                    path.clone(),
+                    if has_deletes {
+                        base.metadata().last_sequence_number()
+                    } else {
+                        *sequence
+                    },
+                )
+            })
+            .collect();
+        let groups = group_files(&base, &files, &sequences)?;
         Ok(Self {
             base,
             files,
             groups,
-            sequences: sequences.clone(),
+            sequences,
+            has_deletes,
         })
     }
 
@@ -54,7 +71,8 @@ impl RewriteDataFilesPlan {
     ///
     /// # Errors
     /// Rejects fewer than two files per group, zero bytes, or any oversized input.
-    /// Singleton remainders remain untouched. Limits cover source descriptors,
+    /// Singleton remainders are untouched only on tables without live deletes.
+    /// Limits cover source descriptors,
     /// not compressed output size or the memory occupied by a decoded batch.
     pub fn with_group_limits(mut self, max_files: usize, max_bytes: u64) -> Result<Self> {
         if max_files < 2 || max_bytes == 0 {
@@ -80,7 +98,7 @@ impl RewriteDataFilesPlan {
         self.base.file_io().inventory().unwrap_or_default()
     }
 
-    /// Returns the selected descriptors, including singleton groups left untouched.
+    /// Returns the selected data-file descriptors, including singleton groups.
     #[must_use]
     pub fn input_files(&self) -> &[DataFile] {
         &self.files
@@ -100,8 +118,9 @@ impl RewriteDataFilesPlan {
 
     /// Writes replacement data files without writing snapshot metadata or publishing.
     ///
-    /// Groups run sequentially without mixing partitions or specs. Singleton
-    /// groups write no files and do not appear in the result's replaced inputs.
+    /// Groups run sequentially without mixing partitions or specs. Tables with
+    /// live deletes also rewrite singleton groups. Delete files remain live;
+    /// their effects are materialized into replacement rows.
     ///
     /// # Errors
     /// Returns scan, writer, or record-count validation errors. Partial output
@@ -113,7 +132,7 @@ impl RewriteDataFilesPlan {
         let mut sequences = HashMap::new();
         for group in &self.groups {
             self.base.file_io().check_cancellation()?;
-            if group.files.len() < 2 {
+            if group.files.len() < 2 && !self.has_deletes {
                 continue;
             }
             let tasks = self.tasks(group).await?;

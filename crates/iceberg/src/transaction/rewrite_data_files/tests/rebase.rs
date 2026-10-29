@@ -296,7 +296,7 @@ async fn append_summary_cannot_hide_changed_unselected_files_or_sequences() -> R
 }
 
 #[tokio::test]
-async fn append_with_live_deletes_is_rejected_before_metadata_writes() -> Result<()> {
+async fn append_with_new_live_deletes_requires_replanning() -> Result<()> {
     use crate::spec::{DataContentType, ManifestContentType, ManifestEntry};
     let (fixture, result) = executed().await?;
     let mut file = result.input_files().first().ok_or_else(missing)?.clone();
@@ -320,7 +320,7 @@ async fn append_with_live_deletes_is_rejected_before_metadata_writes() -> Result
     let error = result.prepare(&table).await.err().ok_or_else(missing)?;
     assert_eq!(
         (error.kind(), result.artifacts().paths()),
-        (ErrorKind::FeatureUnsupported, before)
+        (ErrorKind::PreconditionFailed, before)
     );
     Ok(())
 }
