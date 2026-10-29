@@ -254,13 +254,19 @@ order follows the first selected input. Specs are never merged, even when their
 partition tuples compare equal; this also applies to historical specs after a
 default-spec change. All selected tuples are validated before execution.
 
-Execution plans scan tasks once, buffers the selected task descriptors, and
-executes multi-file groups sequentially using the existing partition-key-aware
-Parquet writer. Rows retain their source partition/spec. It does not repartition,
-change transforms, or recluster data. Singleton groups write nothing and are
-excluded from the result's removed inputs; if every group is a singleton,
-preparation returns no commit. Aggregate selected-descriptor limits and cancellation
-remain separate work; task buffering is not claimed to be resource-bounded.
+Execution streams scan tasks for one group at a time and executes groups
+sequentially with one concurrent data-file reader. This avoids buffering all
+selected scan tasks, at the cost of repeating metadata planning for each group.
+The existing partition-key-aware Parquet writer preserves source partition/spec.
+Singleton groups write nothing and are excluded from removed inputs.
+
+`RewriteDataFilesPlan::with_group_limits(max_files, max_bytes)` optionally
+splits each partition/spec group in stable input order. It requires at least
+two files and a positive byte limit; an individual oversized source is rejected
+before execution. Singleton remainders stay live. Each subgroup recalculates its
+minimum source sequence number. Limits describe source descriptors, not output
+file size, decoded batch memory, or the entire plan's descriptor inventory.
+Cancellation and staged-artifact inventories remain separate work.
 
 Publication preserves each group's minimum data sequence number on every output,
 assigns new file sequence numbers, and computes added-file summaries using each
@@ -1936,3 +1942,14 @@ This roadmap is complete when the fork provides:
     types and caller-provided staged exclusions; and
 13. interoperability with ordinary Iceberg catalogs and readers without any
     downstream product state or proprietary metadata.
+
+## Bounded compaction slice validation (2026-10-29)
+
+From parent `57f360a32`, with the pinned toolchain and unchanged lockfile:
+
+- 2,115 core tests passed, one ignored; two new end-to-end limit tests verify
+  deterministic splitting, retained singleton files, source-byte bounds,
+  invalid/oversized inputs, row preservation, and historical reads.
+- 89 doc tests passed (14 ignored); default and scoped Clippy, formatting,
+  file-length checks, API generation and API consistency checks passed.
+- Full-plan descriptor limits and cancellation are not implemented in this slice.

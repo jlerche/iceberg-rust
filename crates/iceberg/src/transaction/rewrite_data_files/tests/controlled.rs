@@ -444,3 +444,84 @@ async fn publication_does_not_retry_a_lost_success_response() -> Result<()> {
     }
     Ok(())
 }
+
+#[tokio::test]
+async fn group_limits_split_deterministically_and_preserve_rows() -> Result<()> {
+    let mut fixture = Fixture::new().await?;
+    for id in 0..5 {
+        fixture.append(&[row(Some(id), None)]).await?;
+    }
+    let plan = Transaction::new(&fixture.table)
+        .rewrite_data_files()
+        .plan()
+        .await?
+        .with_group_limits(2, u64::MAX)?;
+    assert_eq!(
+        plan.groups()
+            .iter()
+            .map(|group| (group.input_files().len(), group.data_sequence_number()))
+            .collect::<Vec<_>>(),
+        vec![(2, 1), (2, 3), (1, 5)]
+    );
+    let result = plan.execute().await?;
+    assert_eq!(
+        (result.input_files().len(), result.output_files().len()),
+        (4, 2)
+    );
+    let prepared = result
+        .prepare(&fixture.table)
+        .await?
+        .ok_or_else(missing_prepared)?;
+    let fresh = prepared.publish(&fixture.catalog).await?;
+    assert_eq!(
+        (
+            read_rows(&fresh, None).await?,
+            read_rows(&fresh, fixture.table.metadata().current_snapshot_id()).await?
+        ),
+        (
+            (0..5).map(|id| row(Some(id), None)).collect::<Vec<_>>(),
+            read_rows(&fixture.table, None).await?
+        )
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn byte_limits_and_invalid_limits_are_checked_before_execution() -> Result<()> {
+    let mut fixture = Fixture::new().await?;
+    for id in 0..3 {
+        fixture.append(&[row(Some(id), None)]).await?;
+    }
+    let action = Transaction::new(&fixture.table).rewrite_data_files();
+    let plan = action.plan().await?;
+    let largest = plan
+        .input_files()
+        .iter()
+        .map(crate::spec::DataFile::file_size_in_bytes)
+        .max()
+        .ok_or_else(missing_prepared)?;
+    let limited = plan.with_group_limits(10, largest)?;
+    assert!(limited.groups().iter().all(|group| {
+        group
+            .input_files()
+            .iter()
+            .map(crate::spec::DataFile::file_size_in_bytes)
+            .sum::<u64>()
+            <= largest
+    }));
+    for (files, bytes) in [(1, largest), (2, 0), (2, largest - 1)] {
+        assert!(
+            action
+                .plan()
+                .await?
+                .with_group_limits(files, bytes)
+                .is_err()
+        );
+    }
+    let stored = fixture
+        .catalog
+        .load_table(fixture.table.identifier())
+        .await?;
+    assert_eq!(stored.metadata(), fixture.table.metadata());
+    Ok(())
+}

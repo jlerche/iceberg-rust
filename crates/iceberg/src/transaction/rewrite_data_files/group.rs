@@ -17,11 +17,11 @@
 
 use std::collections::HashMap;
 
-use futures::{TryStreamExt, stream};
+use futures::TryStreamExt;
 
 use super::row_count;
 use crate::cow_rewrite::writer::build_replacement_writer;
-use crate::scan::FileScanTask;
+use crate::scan::FileScanTaskStream;
 use crate::spec::{DataFile, PartitionKey, Struct};
 use crate::table::Table;
 use crate::{Error, ErrorKind, Result};
@@ -61,13 +61,14 @@ impl RewriteDataFilesGroup {
     pub(super) async fn execute(
         &self,
         table: &Table,
-        tasks: Vec<FileScanTask>,
+        tasks: FileScanTaskStream,
     ) -> Result<Vec<DataFile>> {
         let expected_rows = row_count(&self.files)?;
         let mut batches = table
             .reader_builder()
+            .with_data_file_concurrency_limit(1)
             .build()
-            .read(Box::pin(stream::iter(tasks.into_iter().map(Ok))))?
+            .read(tasks)?
             .stream();
         let mut writer = build_replacement_writer(
             table,
@@ -137,4 +138,56 @@ pub(super) fn group_files(
         }
     }
     Ok(groups)
+}
+
+impl RewriteDataFilesGroup {
+    fn empty_group(&self) -> Self {
+        Self {
+            files: vec![],
+            partition: self.partition.clone(),
+            sequence_number: i64::MAX,
+        }
+    }
+
+    pub(super) fn split(
+        &self,
+        max_files: usize,
+        max_bytes: u64,
+        sequences: &HashMap<String, i64>,
+    ) -> Result<Vec<Self>> {
+        let mut groups = vec![];
+        let mut group = self.empty_group();
+        let mut bytes = 0_u64;
+        for file in &self.files {
+            let size = file.file_size_in_bytes();
+            if size > max_bytes {
+                return Err(Error::new(
+                    ErrorKind::DataInvalid,
+                    "Input file exceeds rewrite byte limit",
+                ));
+            }
+            if !group.files.is_empty()
+                && (group.files.len() == max_files || size > max_bytes - bytes)
+            {
+                groups.push(group);
+                group = self.empty_group();
+                bytes = 0;
+            }
+            if group.files.is_empty() {
+                group.sequence_number = i64::MAX;
+            }
+            group.sequence_number =
+                group
+                    .sequence_number
+                    .min(*sequences.get(file.file_path()).ok_or_else(|| {
+                        Error::new(ErrorKind::DataInvalid, "Missing input sequence number")
+                    })?);
+            group.files.push(file.clone());
+            bytes += size;
+        }
+        if !group.files.is_empty() {
+            groups.push(group);
+        }
+        Ok(groups)
+    }
 }

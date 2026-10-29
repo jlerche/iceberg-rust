@@ -15,22 +15,23 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
-use futures::TryStreamExt;
+use futures::{TryStreamExt, future};
 
 use super::group::group_files;
 use super::{RewriteDataFilesGroup, RewriteDataFilesResult};
-use crate::Result;
-use crate::scan::FileScanTask;
+use crate::scan::FileScanTaskStream;
 use crate::spec::DataFile;
 use crate::table::Table;
+use crate::{Error, ErrorKind, Result};
 
 /// Pins the input files and partition groups for a row-preserving rewrite.
 pub struct RewriteDataFilesPlan {
     base: Table,
     files: Vec<DataFile>,
     groups: Vec<RewriteDataFilesGroup>,
+    sequences: HashMap<String, i64>,
 }
 
 impl RewriteDataFilesPlan {
@@ -44,7 +45,32 @@ impl RewriteDataFilesPlan {
             base,
             files,
             groups,
+            sequences: sequences.clone(),
         })
+    }
+
+    /// Splits groups deterministically within file-count and source-byte limits.
+    ///
+    /// # Errors
+    /// Rejects fewer than two files per group, zero bytes, or any oversized input.
+    /// Singleton remainders remain untouched. Limits cover source descriptors,
+    /// not compressed output size or the memory occupied by a decoded batch.
+    pub fn with_group_limits(mut self, max_files: usize, max_bytes: u64) -> Result<Self> {
+        if max_files < 2 || max_bytes == 0 {
+            return Err(Error::new(
+                ErrorKind::DataInvalid,
+                "Rewrite limits require at least two files and nonzero bytes",
+            ));
+        }
+        self.groups = self
+            .groups
+            .iter()
+            .map(|group| group.split(max_files, max_bytes, &self.sequences))
+            .collect::<Result<Vec<_>>>()?
+            .into_iter()
+            .flatten()
+            .collect();
+        Ok(self)
     }
 
     /// Returns the selected descriptors, including singleton groups left untouched.
@@ -74,14 +100,14 @@ impl RewriteDataFilesPlan {
     /// Returns scan, writer, or record-count validation errors. Partial output
     /// files are retained after errors or cancellation; callers own cleanup.
     pub async fn execute(self) -> Result<RewriteDataFilesResult> {
-        let tasks = self.tasks().await?;
         let mut inputs = vec![];
         let mut outputs = vec![];
         let mut sequences = HashMap::new();
-        for (group, tasks) in self.groups.iter().zip(tasks) {
+        for group in &self.groups {
             if group.files.len() < 2 {
                 continue;
             }
+            let tasks = self.tasks(group).await?;
             let files = group.execute(&self.base, tasks).await?;
             sequences.extend(
                 files
@@ -96,29 +122,22 @@ impl RewriteDataFilesPlan {
         ))
     }
 
-    async fn tasks(&self) -> Result<Vec<Vec<FileScanTask>>> {
-        let mut tasks: Vec<Vec<FileScanTask>> = self.groups.iter().map(|_| vec![]).collect();
-        let paths: HashMap<_, _> = self
-            .groups
+    async fn tasks(&self, group: &RewriteDataFilesGroup) -> Result<FileScanTaskStream> {
+        let paths: HashSet<String> = group
+            .files
             .iter()
-            .enumerate()
-            .filter(|(_, group)| group.files.len() >= 2)
-            .flat_map(|(index, group)| {
-                group
-                    .files
-                    .iter()
-                    .map(move |file| (file.file_path(), index))
-            })
+            .map(|file| file.file_path().to_string())
             .collect();
-        if paths.is_empty() {
-            return Ok(tasks);
-        }
-        let mut stream = self.base.scan().build()?.plan_files().await?;
-        while let Some(task) = stream.try_next().await? {
-            if let Some(index) = paths.get(task.data_file_path()).copied() {
-                tasks[index].push(task);
-            }
-        }
-        Ok(tasks)
+        let tasks = self
+            .base
+            .scan()
+            .with_concurrency_limit(1)
+            .with_data_file_concurrency_limit(1)
+            .with_manifest_entry_concurrency_limit(1)
+            .build()?
+            .plan_files()
+            .await?
+            .try_filter(move |task| future::ready(paths.contains(task.data_file_path())));
+        Ok(Box::pin(tasks))
     }
 }

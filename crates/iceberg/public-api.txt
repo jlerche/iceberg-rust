@@ -3496,6 +3496,7 @@ pub fn iceberg::transaction::RewriteDataFilesPlan::base_snapshot_id(&self) -> co
 pub async fn iceberg::transaction::RewriteDataFilesPlan::execute(self) -> iceberg::Result<iceberg::transaction::RewriteDataFilesResult>
 pub fn iceberg::transaction::RewriteDataFilesPlan::groups(&self) -> &[iceberg::transaction::RewriteDataFilesGroup]
 pub fn iceberg::transaction::RewriteDataFilesPlan::input_files(&self) -> &[iceberg::spec::DataFile]
+pub fn iceberg::transaction::RewriteDataFilesPlan::with_group_limits(self, max_files: usize, max_bytes: u64) -> iceberg::Result<Self>
 pub struct iceberg::transaction::RewriteDataFilesResult
 impl iceberg::transaction::RewriteDataFilesResult
 pub const fn iceberg::transaction::RewriteDataFilesResult::has_changes(&self) -> bool
