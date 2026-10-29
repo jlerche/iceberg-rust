@@ -78,7 +78,9 @@ use crate::transaction::action::TransactionActionEntry;
 pub use crate::transaction::append::FastAppendAction;
 pub use crate::transaction::expire_snapshots::ExpireSnapshotsAction;
 pub use crate::transaction::overwrite::OverwriteFilesAction;
-pub use crate::transaction::rewrite_data_files::RewriteDataFilesAction;
+pub use crate::transaction::rewrite_data_files::{
+    PreparedRewriteDataFiles, RewriteDataFilesAction, RewriteDataFilesPlan, RewriteDataFilesResult,
+};
 pub use crate::transaction::sort_order::ReplaceSortOrderAction;
 pub use crate::transaction::update_location::UpdateLocationAction;
 pub use crate::transaction::update_properties::UpdatePropertiesAction;

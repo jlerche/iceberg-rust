@@ -3463,6 +3463,13 @@ pub fn iceberg::transaction::OverwriteFilesAction::add_data_files(self, files: i
 pub fn iceberg::transaction::OverwriteFilesAction::remove_data_files(self, files: impl core::iter::traits::collect::IntoIterator<Item = iceberg::spec::DataFile>) -> Self
 impl core::clone::Clone for iceberg::transaction::OverwriteFilesAction
 pub fn iceberg::transaction::OverwriteFilesAction::clone(&self) -> iceberg::transaction::OverwriteFilesAction
+pub struct iceberg::transaction::PreparedRewriteDataFiles
+impl iceberg::transaction::PreparedRewriteDataFiles
+pub fn iceberg::transaction::PreparedRewriteDataFiles::base_metadata_location(&self) -> core::option::Option<&str>
+pub fn iceberg::transaction::PreparedRewriteDataFiles::base_snapshot_id(&self) -> core::option::Option<i64>
+pub fn iceberg::transaction::PreparedRewriteDataFiles::into_table_commit(self) -> iceberg::TableCommit
+pub async fn iceberg::transaction::PreparedRewriteDataFiles::publish(self, catalog: &dyn iceberg::Catalog) -> iceberg::Result<iceberg::table::Table>
+pub const fn iceberg::transaction::PreparedRewriteDataFiles::snapshot(&self) -> &iceberg::spec::Snapshot
 pub struct iceberg::transaction::ReplaceSortOrderAction
 impl iceberg::transaction::ReplaceSortOrderAction
 pub fn iceberg::transaction::ReplaceSortOrderAction::asc(self, name: &str, null_order: iceberg::spec::NullOrder) -> Self
@@ -3472,8 +3479,24 @@ pub fn iceberg::transaction::ReplaceSortOrderAction::desc_with_transform(self, n
 impl core::clone::Clone for iceberg::transaction::ReplaceSortOrderAction
 pub fn iceberg::transaction::ReplaceSortOrderAction::clone(&self) -> iceberg::transaction::ReplaceSortOrderAction
 pub struct iceberg::transaction::RewriteDataFilesAction
+impl iceberg::transaction::RewriteDataFilesAction
+pub async fn iceberg::transaction::RewriteDataFilesAction::plan(&self) -> iceberg::Result<iceberg::transaction::RewriteDataFilesPlan>
+pub fn iceberg::transaction::RewriteDataFilesAction::select_data_files(self, files: impl core::iter::traits::collect::IntoIterator<Item = iceberg::spec::DataFile>) -> Self
 impl core::clone::Clone for iceberg::transaction::RewriteDataFilesAction
 pub fn iceberg::transaction::RewriteDataFilesAction::clone(&self) -> iceberg::transaction::RewriteDataFilesAction
+pub struct iceberg::transaction::RewriteDataFilesPlan
+impl iceberg::transaction::RewriteDataFilesPlan
+pub fn iceberg::transaction::RewriteDataFilesPlan::base_snapshot_id(&self) -> core::option::Option<i64>
+pub async fn iceberg::transaction::RewriteDataFilesPlan::execute(self) -> iceberg::Result<iceberg::transaction::RewriteDataFilesResult>
+pub fn iceberg::transaction::RewriteDataFilesPlan::input_files(&self) -> &[iceberg::spec::DataFile]
+pub struct iceberg::transaction::RewriteDataFilesResult
+impl iceberg::transaction::RewriteDataFilesResult
+pub const fn iceberg::transaction::RewriteDataFilesResult::has_changes(&self) -> bool
+pub fn iceberg::transaction::RewriteDataFilesResult::input_files(&self) -> &[iceberg::spec::DataFile]
+pub fn iceberg::transaction::RewriteDataFilesResult::output_files(&self) -> &[iceberg::spec::DataFile]
+pub async fn iceberg::transaction::RewriteDataFilesResult::prepare(&self, table: &iceberg::table::Table) -> iceberg::Result<core::option::Option<iceberg::transaction::PreparedRewriteDataFiles>>
+impl core::clone::Clone for iceberg::transaction::RewriteDataFilesResult
+pub fn iceberg::transaction::RewriteDataFilesResult::clone(&self) -> iceberg::transaction::RewriteDataFilesResult
 pub struct iceberg::transaction::Transaction
 impl iceberg::transaction::Transaction
 pub async fn iceberg::transaction::Transaction::commit(self, catalog: &dyn iceberg::Catalog) -> iceberg::Result<iceberg::table::Table>

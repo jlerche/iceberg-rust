@@ -448,3 +448,5 @@ async fn compaction_reuses_output_files_across_publication_attempts() -> Result<
     );
     Ok(())
 }
+
+mod controlled;

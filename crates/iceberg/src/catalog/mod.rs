@@ -368,7 +368,8 @@ pub struct TableCreation {
 ///
 /// The builder is marked as private since it's dangerous and error-prone to construct
 /// [`TableCommit`] directly.
-/// Users are supposed to use [`crate::transaction::Transaction`] to update table.
+/// Use [`crate::transaction::Transaction`] or a caller-prepared commit from
+/// [`crate::transaction::PreparedRewriteDataFiles`] to update a table.
 #[derive(Debug, TypedBuilder)]
 #[builder(build_method(vis = "pub(crate)"))]
 pub struct TableCommit {

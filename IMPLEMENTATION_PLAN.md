@@ -17,7 +17,7 @@
   under the License.
 -->
 
-# Implementation Plan: Iceberg Mutation and DataFusion Write Support
+# Implementation Plan: Caller-Controlled Iceberg Mutation and Compaction
 
 ## 1. Scope
 
@@ -31,6 +31,30 @@ architecture is part of this work. Every API, type, metadata field, module, and
 test added under this plan must make sense for an ordinary Iceberg user with no
 knowledge of any particular application.
 
+### Downstream context and delivery priority
+
+The immediate consumer is `icestream`, a diskless, brokerless, leaderless
+Kafka-compatible engine. Its Postgres metadata coordinates Kafka state; object
+storage holds WAL batches and Iceberg data. WAL-to-table ingestion and later
+physical compaction of topic tables must remain under that application's
+control. A future distributed OLAP engine may consume the same tables and
+maintain incremental views in an Enzyme/DBSP-style execution layer.
+
+This context sets the priority: provide caller-selected, row-preserving rewrite
+execution separately from Iceberg publication. This library owns standard
+snapshot/file semantics and validation. `icestream` owns WAL lifecycle, offsets,
+Kafka metadata, Postgres transactions, scheduling, and logical view state.
+Physical `replace` snapshots must not be mistaken for logical row changes.
+Do not add Kafka state, source checkpoints, custom sidecars, or IVM operator
+state to Iceberg metadata or public core types.
+
+The library must expose a prepared standard `TableCommit` that a downstream
+catalog adapter can apply inside its own transaction. The adapter is responsible
+for atomically validating the observed Iceberg base and changing the table
+pointer together with its application metadata. Calling two unrelated commits
+in sequence is not an atomic publication protocol. No Postgres implementation
+or cross-system atomicity guarantee is part of this fork slice.
+
 ## 2. Hard repository boundary
 
 The following work is explicitly outside this repository and outside this plan:
@@ -42,8 +66,8 @@ The following work is explicitly outside this repository and outside this plan:
 - proprietary logical CDC or change-sidecar formats;
 - engine-specific row IDs or logical-to-physical row locators;
 - proprietary arrangements, secondary indexes, or index routing;
-- atomic publication protocols that combine an Iceberg commit with
-  application-specific state;
+- application-specific atomic publication protocols that combine an Iceberg
+  commit with external state; generic prepared commits are in scope;
 - application query fingerprints, provenance, operator state, or audit models.
 
 Those concerns must live in a separate repository that consumes this fork
@@ -147,8 +171,10 @@ and readjust fork changes afterward, even when substantial rework is required.
    writer and a standard `replace` snapshot. It owns row-preserving execution
    rather than accepting caller-transformed output. Outputs inherit the minimum
    input data sequence number and receive new file sequence numbers. A changed
-   planning base requires replanning. Repartitioning, reclustering, selected-file
-   groups, safe concurrent rebase, applicable-delete reconciliation, and v3
+   planning base requires replanning. Caller-selected file sets and explicit
+   execution/preparation/publication are available through the staged API below.
+   Repartitioning,
+   reclustering, safe concurrent rebase, applicable-delete reconciliation, and v3
    lineage support remain follow-up work.
 
 The initial overwrite action does not provide prepare/publish APIs, named-branch
@@ -164,6 +190,85 @@ Core entry points are `crates/iceberg/src/transaction/overwrite.rs`,
 G, K, and DataFusion portions of H–J remain companion-repository work. Record
 that repository and pinned dependency before implementing those adapters; do
 not restore removed integration crates just to satisfy this roadmap.
+
+### Caller-controlled compaction contract (2026-10-29)
+
+The primary flow is now:
+
+```text
+RewriteDataFilesAction::select_data_files(...)  (optional; defaults to all files)
+    -> plan()                  pinned table, exact live inputs, source data age
+    -> RewriteDataFilesPlan::execute()
+                               writes immutable Parquet outputs only
+    -> RewriteDataFilesResult  immutable input/output descriptors
+    -> prepare(fresh_table)    validates base/liveness, writes snapshot metadata
+    -> PreparedRewriteDataFiles
+    -> into_table_commit()     transfers standard updates/requirements to caller
+       or publish(catalog)     one-shot generic publication
+```
+
+Planning reads standard metadata without writing files. Execution performs no
+catalog update and writes no manifests or snapshots. It reads only the selected
+files and forwards their complete rows unchanged. Preparation never rewrites
+data and does not load or update a catalog; the caller supplies a freshly loaded
+table. A no-op produces no prepared commit. The existing one-call transaction
+API remains a convenience wrapper over the same stages, and an executed result
+can be applied to a transaction without repeating data execution.
+
+`PreparedRewriteDataFiles` exposes the source metadata location, source snapshot,
+and full prepared snapshot identity for downstream compare-and-swap and recovery.
+A catalog adapter must validate standard requirements and the protected metadata
+base atomically with application metadata. Catalog-owned metadata JSON persistence
+remains catalog-owned; preparation requires no prewritten table JSON location.
+A prepublication load alone cannot close a concurrent-publication race: the
+catalog still needs atomic requirements/compare-and-swap enforcement.
+
+Retain the narrow format matrix: main, unpartitioned v2, default-spec data files,
+and no live delete files. Reject duplicate, absent, or mismatched selected source
+descriptors. Output data sequence numbers inherit the minimum among the selected
+inputs; unselected files remain live with their original sequences/manifests.
+A changed table identity, metadata location, schema, spec, or head requires
+replanning. This slice does not add safe concurrent rebasing or multiple-reference
+publication.
+
+No stage physically deletes source or staged artifacts. A prepared publication
+is submitted once; ambiguous outcomes require caller recovery using the recorded
+snapshot identity and catalog evidence. Do not blindly resubmit, rewrite, or
+clean up uncertain artifacts. Durable wire formats for plans/results, distributed
+worker scheduling, comprehensive partial-artifact inventories, and automatic
+unknown-outcome recovery remain future work.
+
+Immediate follow-ups are partition-aware rewrite groups, bounded resource and
+artifact inventories, and adapter-level tests in the consuming project proving
+that its Iceberg pointer and Postgres/Kafka metadata move in one transaction.
+External logical change tracking and IVM remain outside this fork. File-level
+snapshot diffs must expose physical replacement semantics rather than inventing
+logical stream changes.
+
+### Caller-controlled compaction validation
+
+Validated on 2026-10-29 from parent `81f70f9f2`, selected toolchain
+`nightly-2026-04-16`, with unchanged Cargo.lock blob
+`dcd6452de71a284c3b57ee0c90204c3efacad743`:
+
+- `cargo test --locked -p iceberg --lib --quiet`: 2,106 passed, one ignored.
+  Sixteen compaction tests include nine new caller-controlled cases. Filesystem
+  inventories prove execution writes no metadata and preparation writes no data.
+  Catalog state remains unchanged until explicit publication. Selected-file,
+  untouched-file, row multiset, sequence, no-op, stale-base, raw-commit conflict,
+  executed-result transaction, and lost-success-response cases pass.
+- `cargo test --locked -p iceberg --doc --quiet`: 89 passed, 14 ignored,
+  including the staged API example.
+- `make check-fork-lints`: passed; stricter Clippy, formatting, ten checker
+  self-tests, and all seven registered fork-owned files below 1,000 lines.
+- `cargo clippy --locked -p iceberg --all-targets --all-features -- -D warnings`:
+  passed with the default upstream configuration.
+- `make generate-public-api` and `make check-public-api`: passed; reviewed
+  additions are limited to source selection, the plan/result/prepared types,
+  and their staged methods.
+- Actual Postgres/application-state atomicity must be validated in the consuming
+  catalog adapter. No Postgres, external-reader, REST/RustFS, full-workspace,
+  or distributed-executor validation is claimed by these local tests.
 
 ### Initial overwrite slice validation (2026-10-28)
 

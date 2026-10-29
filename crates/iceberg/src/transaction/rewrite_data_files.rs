@@ -38,61 +38,111 @@
     clippy::wildcard_imports
 )]
 
-use std::collections::HashSet;
+mod plan;
+mod prepared;
+mod result;
+
+use std::collections::{HashMap, HashSet};
 
 use async_trait::async_trait;
-use futures::TryStreamExt;
+pub use plan::RewriteDataFilesPlan;
+pub use prepared::PreparedRewriteDataFiles;
+pub use result::RewriteDataFilesResult;
 
 use super::action::CommitStatus;
-use super::overwrite::{OverwriteFilesAction, OverwriteFilesState};
+use super::overwrite::OverwriteFilesState;
 use super::snapshot::current_manifests;
 use super::{ActionCommit, TransactionAction};
-use crate::cow_rewrite::writer::build_replacement_writer;
-use crate::spec::{DataFile, FormatVersion, ManifestContentType, TableMetadataRef};
+use crate::spec::{DataFile, FormatVersion, ManifestContentType};
 use crate::table::Table;
 use crate::{Error, ErrorKind, Result};
 
-/// Compacts all current data files while preserving every row and its multiplicity.
+/// Plans row-preserving compaction against a pinned table state.
 ///
-/// Supports main on unpartitioned v2 tables without live delete files, with all
-/// inputs under the default spec. Output uses the table's target Parquet file
-/// size; file count reduction depends on that setting. Fewer than two inputs
-/// produces no snapshot. Any change to the planning base requires replanning.
-/// Output data sequence numbers use the minimum input sequence number; file
-/// sequence numbers are assigned by the new replace snapshot. Physical files
-/// are retained for historical reads, including after failed or ambiguous commits.
+/// Supports main on unpartitioned v2 tables without live delete files. All
+/// inputs must use the default spec. Output rolling uses the table's target
+/// Parquet file size. Fewer than two selected inputs produces no snapshot.
+/// Any changed planning base requires replanning. Files are never deleted
+/// automatically, including after failed or ambiguous publication.
 ///
 /// ```no_run
 /// use iceberg::table::Table;
-/// use iceberg::transaction::{ApplyTransactionAction, Transaction};
+/// use iceberg::transaction::Transaction;
 /// use iceberg::{Catalog, Result};
 ///
-/// async fn compact(table: &Table, catalog: &dyn Catalog) -> Result<Table> {
-///     let tx = Transaction::new(table);
-///     tx.rewrite_data_files().apply(tx)?.commit(catalog).await
+/// async fn compact(table: &Table, catalog: &dyn Catalog) -> Result<()> {
+///     let plan = Transaction::new(table).rewrite_data_files().plan().await?;
+///     let result = plan.execute().await?;
+///     let fresh = catalog.load_table(table.identifier()).await?;
+///     if let Some(prepared) = result.prepare(&fresh).await? {
+///         catalog.update_table(prepared.into_table_commit()).await?;
+///     }
+///     Ok(())
 /// }
 /// ```
 #[derive(Clone)]
 pub struct RewriteDataFilesAction {
-    base: TableMetadataRef,
+    base: Table,
+    selected: Option<Vec<DataFile>>,
 }
 
 impl RewriteDataFilesAction {
     pub(crate) fn new(table: &Table) -> Self {
         Self {
-            base: table.metadata_ref(),
+            base: table.clone(),
+            selected: None,
         }
     }
 
-    async fn inputs(&self, table: &Table) -> Result<(Vec<DataFile>, i64)> {
-        if table.metadata() != self.base.as_ref() {
-            return Err(Error::new(
-                ErrorKind::PreconditionFailed,
-                "Compaction planning base changed; replan the rewrite",
-            ));
+    /// Restricts compaction to exact live data-file descriptors.
+    #[must_use]
+    pub fn select_data_files(mut self, files: impl IntoIterator<Item = DataFile>) -> Self {
+        self.selected = Some(files.into_iter().collect());
+        self
+    }
+
+    /// Resolves the selected inputs without writing files or publishing metadata.
+    ///
+    /// # Errors
+    /// Returns an error for unsupported tables, live deletes, duplicate inputs,
+    /// or selected descriptors that do not match live files.
+    pub async fn plan(&self) -> Result<RewriteDataFilesPlan> {
+        let (files, sequence_number) = self.inputs(&self.base).await?;
+        let files = self.select_inputs(files)?;
+        Ok(RewriteDataFilesPlan::new(
+            self.base.clone(),
+            files,
+            sequence_number,
+        ))
+    }
+
+    fn select_inputs(&self, files: Vec<DataFile>) -> Result<Vec<DataFile>> {
+        let Some(selected) = &self.selected else {
+            return Ok(files);
+        };
+        let live: HashMap<_, _> = files.iter().map(|file| (file.file_path(), file)).collect();
+        let mut paths = HashSet::new();
+        for file in selected {
+            if !paths.insert(file.file_path()) || live.get(file.file_path()).copied() != Some(file)
+            {
+                return Err(Error::new(
+                    ErrorKind::DataInvalid,
+                    "Selected compaction input is duplicate, missing, or has a mismatched descriptor",
+                ));
+            }
         }
-        if self.base.format_version() != FormatVersion::V2
-            || !self.base.default_partition_spec().fields().is_empty()
+        Ok(selected.clone())
+    }
+
+    async fn inputs(&self, table: &Table) -> Result<(Vec<DataFile>, i64)> {
+        validate_base(&self.base, table)?;
+        if self.base.metadata().format_version() != FormatVersion::V2
+            || !self
+                .base
+                .metadata()
+                .default_partition_spec()
+                .fields()
+                .is_empty()
         {
             return Err(Error::new(
                 ErrorKind::FeatureUnsupported,
@@ -102,6 +152,12 @@ impl RewriteDataFilesAction {
         let mut files = vec![];
         let mut sequence_number = i64::MAX;
         let mut paths = HashSet::new();
+        let selected_paths = self.selected.as_ref().map(|files| {
+            files
+                .iter()
+                .map(DataFile::file_path)
+                .collect::<HashSet<_>>()
+        });
         for descriptor in current_manifests(table).await? {
             let manifest = table.object_cache().get_manifest(&descriptor).await?;
             for entry in manifest.entries().iter().filter(|entry| entry.is_alive()) {
@@ -111,7 +167,9 @@ impl RewriteDataFilesAction {
                         "Compaction with live delete files is not yet supported",
                     ));
                 }
-                if entry.data_file().partition_spec_id != self.base.default_partition_spec_id() {
+                if entry.data_file().partition_spec_id
+                    != self.base.metadata().default_partition_spec_id()
+                {
                     return Err(Error::new(
                         ErrorKind::FeatureUnsupported,
                         "Compaction requires all live data files to use the default partition spec",
@@ -129,7 +187,12 @@ impl RewriteDataFilesAction {
                         "Compaction input lacks a valid data sequence number",
                     )
                 })?;
-                sequence_number = sequence_number.min(sequence);
+                if selected_paths
+                    .as_ref()
+                    .is_none_or(|paths| paths.contains(entry.file_path()))
+                {
+                    sequence_number = sequence_number.min(sequence);
+                }
                 files.push(entry.data_file().clone());
             }
         }
@@ -139,7 +202,7 @@ impl RewriteDataFilesAction {
 
 /// Retry-persistent replacement files and publication state.
 pub struct RewriteDataFilesState {
-    prepared: Option<(OverwriteFilesAction, OverwriteFilesState)>,
+    prepared: Option<(RewriteDataFilesResult, OverwriteFilesState)>,
 }
 
 #[async_trait]
@@ -151,52 +214,41 @@ impl TransactionAction for RewriteDataFilesAction {
     }
 
     async fn commit(&self, state: &mut Self::State, table: &Table) -> Result<ActionCommit> {
-        let (files, sequence_number) = self.inputs(table).await?;
-        if files.len() < 2 {
-            return Ok(ActionCommit::new(vec![], vec![]));
-        }
+        validate_base(&self.base, table)?;
         if state.prepared.is_none() {
-            let expected_rows = row_count(&files)?;
-            let mut batches = table.scan().build()?.to_arrow().await?;
-            let mut writer =
-                build_replacement_writer(table, self.base.current_schema().clone(), None).await?;
-            let mut rows = 0_u64;
-            while let Some(batch) = batches.try_next().await? {
-                rows = rows
-                    .checked_add(u64::try_from(batch.num_rows()).map_err(|error| {
-                        Error::new(ErrorKind::DataInvalid, "Compaction batch size overflow")
-                            .with_source(error)
-                    })?)
-                    .ok_or_else(|| {
-                        Error::new(ErrorKind::DataInvalid, "Compaction row count overflow")
-                    })?;
-                if batch.num_rows() > 0 {
-                    writer.write(batch).await?;
-                }
-            }
-            let outputs = writer.close().await?;
-            if rows != expected_rows || row_count(&outputs)? != expected_rows {
-                return Err(Error::new(
-                    ErrorKind::DataInvalid,
-                    "Compaction row count does not match source descriptors",
-                ));
-            }
-            let action = OverwriteFilesAction::for_rewrite(table, sequence_number)
-                .remove_data_files(files)
-                .add_data_files(outputs);
-            let publication = action.new_state();
-            state.prepared = Some((action, publication));
+            let result = self.plan().await?.execute().await?;
+            let publication = result.new_state();
+            state.prepared = Some((result, publication));
         }
-        let (action, publication) = state.prepared.as_mut().ok_or_else(|| {
+        let (result, publication) = state.prepared.as_mut().ok_or_else(|| {
             Error::new(
                 ErrorKind::Unexpected,
                 "Compaction publication was not prepared",
             )
         })?;
-        action.commit(publication, table).await
+        result.commit(publication, table).await
     }
 
     async fn cleanup(self, _state: Self::State, _table: &Table, _status: CommitStatus) {}
+}
+
+fn validate_base(base: &Table, table: &Table) -> Result<()> {
+    if base.readonly() || table.readonly() {
+        return Err(Error::new(
+            ErrorKind::PreconditionFailed,
+            "Cannot compact a read-only table",
+        ));
+    }
+    if base.identifier() != table.identifier()
+        || base.metadata() != table.metadata()
+        || base.metadata_location() != table.metadata_location()
+    {
+        return Err(Error::new(
+            ErrorKind::PreconditionFailed,
+            "Compaction planning base changed; replan the rewrite",
+        ));
+    }
+    Ok(())
 }
 
 fn row_count(files: &[DataFile]) -> Result<u64> {

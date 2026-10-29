@@ -1,3 +1,7 @@
 crates/iceberg/src/transaction/overwrite.rs
 crates/iceberg/src/transaction/rewrite_data_files.rs
 crates/iceberg/src/transaction/rewrite_data_files/tests.rs
+crates/iceberg/src/transaction/rewrite_data_files/plan.rs
+crates/iceberg/src/transaction/rewrite_data_files/result.rs
+crates/iceberg/src/transaction/rewrite_data_files/prepared.rs
+crates/iceberg/src/transaction/rewrite_data_files/tests/controlled.rs
