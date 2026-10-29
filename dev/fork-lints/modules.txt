@@ -10,3 +10,8 @@ crates/iceberg/src/transaction/rewrite_data_files/tests/partitions.rs
 crates/iceberg/src/io/artifacts.rs
 crates/iceberg/src/io/cancellation.rs
 crates/iceberg/src/transaction/rewrite_data_files/tests/cancellation.rs
+crates/integration_tests/tests/rewrite_compaction_test.rs
+crates/integration_tests/tests/rewrite_compaction/fixture.rs
+crates/integration_tests/tests/rewrite_compaction/faults.rs
+crates/integration_tests/tests/rewrite_compaction/lifecycle.rs
+crates/integration_tests/tests/rewrite_compaction/failures.rs

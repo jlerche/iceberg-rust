@@ -2055,3 +2055,41 @@ Cancellation validation used parent `8c22ee2e1`, toolchain
 - Independent reviewers confirmed the fixes; one independently ran all eleven
   cancellation tests and the other independently ran the retention regression.
 - Full workspace, external reader, and REST/RustFS milestone gates remain pending.
+
+## REST and RustFS compaction coverage (2026-10-29)
+
+The fork compaction lifecycle now has eight end-to-end tests using the real REST
+catalog and OpenDAL S3 backend against RustFS. Each test creates a UUID namespace
+and removes only its own table root and namespace. Tests share the repository's
+long-lived runtime so pooled HTTP clients remain usable across parallel cases.
+
+Coverage includes null partitions and duplicate rows, mixed partition specs,
+historical and filtered scans, sequence numbers, unchanged metadata before
+publication, competing prepared commits, and stale publication after append.
+Failure cases exercise an actual partial S3 object write, a successful manifest
+upload followed by a close error, cancellation during writing, and a real REST
+commit followed by a simulated lost response at the Catalog boundary. The last
+case does not inject a dropped HTTP connection. Artifact inventories and source
+row preservation are checked alongside catalog outcomes; no automatic deletion
+or recovery behavior is added.
+
+Run this focused slice without starting Spark or the other catalog emulators:
+
+```bash
+docker compose -p iceberg-compaction-tests -f dev/docker-compose.yaml up -d --wait object-store rest
+docker compose -p iceberg-compaction-tests -f dev/docker-compose.yaml run --rm create-buckets
+cargo test --locked -p iceberg-integration-tests --test rewrite_compaction_test
+cargo test --locked -p iceberg-integration-tests --test conflict_commit_test
+make check-fork-lints
+docker compose -p iceberg-compaction-tests -f dev/docker-compose.yaml logs > /tmp/iceberg-compaction-tests.log
+docker compose -p iceberg-compaction-tests -f dev/docker-compose.yaml down -v --remove-orphans
+```
+
+Validation uses parent `8d0f7bb5a`, the pinned Rust toolchain, REST fixture
+`apache/iceberg-rest-fixture:1.10.1`, and `rustfs/rustfs:1.0.3`. Cargo.lock adds
+only integration-test dependency edges, with no dependency version changes.
+All eight new tests and the existing append-conflict test pass against this
+stack. Formatting, scoped Clippy, checker self-tests, and the 1,000-line gate
+pass for all seventeen registered fork-owned files. No library API is added.
+Full-workspace checks, external-reader interoperability, wire-level response
+loss, and production Postgres coordination remain outside this test slice.
