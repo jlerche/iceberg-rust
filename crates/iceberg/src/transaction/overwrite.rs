@@ -82,7 +82,7 @@ pub struct OverwriteFilesAction {
     base: TableMetadataRef,
     removed: Vec<DataFile>,
     added: Vec<DataFile>,
-    rewrite_sequence_number: Option<i64>,
+    rewrite_sequence_numbers: Option<HashMap<String, i64>>,
 }
 
 impl OverwriteFilesAction {
@@ -91,13 +91,13 @@ impl OverwriteFilesAction {
             base: table.metadata_ref(),
             removed: vec![],
             added: vec![],
-            rewrite_sequence_number: None,
+            rewrite_sequence_numbers: None,
         }
     }
 
-    pub(super) fn for_rewrite(table: &Table, sequence_number: i64) -> Self {
+    pub(super) fn for_rewrite(table: &Table, sequence_numbers: HashMap<String, i64>) -> Self {
         Self {
-            rewrite_sequence_number: Some(sequence_number),
+            rewrite_sequence_numbers: Some(sequence_numbers),
             ..Self::new(table)
         }
     }
@@ -131,6 +131,18 @@ impl OverwriteFilesAction {
             return Err(Error::new(
                 ErrorKind::DataInvalid,
                 "Overwrite requires source files",
+            ));
+        }
+        if let Some(numbers) = &self.rewrite_sequence_numbers
+            && self.added.iter().any(|file| {
+                numbers
+                    .get(file.file_path())
+                    .is_none_or(|number| *number < 0)
+            })
+        {
+            return Err(Error::new(
+                ErrorKind::DataInvalid,
+                "Rewrite output lacks a valid data sequence number",
             ));
         }
         let mut paths = HashSet::new();
@@ -266,7 +278,12 @@ impl TransactionAction for OverwriteFilesAction {
                 writer.add_entry(
                     ManifestEntry::builder()
                         .status(ManifestStatus::Added)
-                        .sequence_number_opt(self.rewrite_sequence_number)
+                        .sequence_number_opt(
+                            self.rewrite_sequence_numbers
+                                .as_ref()
+                                .and_then(|numbers| numbers.get(file.file_path()))
+                                .copied(),
+                        )
                         .data_file(file.clone())
                         .build(),
                 )?;
@@ -278,7 +295,7 @@ impl TransactionAction for OverwriteFilesAction {
         let mut result = write_snapshot_commit(table, SnapshotCommitInput {
             snapshot_id,
             manifest_list_path: path,
-            operation: if self.rewrite_sequence_number.is_some() {
+            operation: if self.rewrite_sequence_numbers.is_some() {
                 Operation::Replace
             } else if self.added.is_empty() {
                 Operation::Delete

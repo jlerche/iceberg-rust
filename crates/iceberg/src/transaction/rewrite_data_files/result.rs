@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::collections::HashMap;
+
 use async_trait::async_trait;
 
 use super::super::action::CommitStatus;
@@ -31,7 +33,7 @@ pub struct RewriteDataFilesResult {
     base: Table,
     inputs: Vec<DataFile>,
     outputs: Vec<DataFile>,
-    sequence_number: i64,
+    sequence_numbers: HashMap<String, i64>,
 }
 
 impl RewriteDataFilesResult {
@@ -39,17 +41,17 @@ impl RewriteDataFilesResult {
         base: Table,
         inputs: Vec<DataFile>,
         outputs: Vec<DataFile>,
-        sequence_number: i64,
+        sequence_numbers: HashMap<String, i64>,
     ) -> Self {
         Self {
             base,
             inputs,
             outputs,
-            sequence_number,
+            sequence_numbers,
         }
     }
 
-    /// Returns the exact source files selected for replacement.
+    /// Returns the source files replaced by completed multi-file groups.
     #[must_use]
     pub fn input_files(&self) -> &[DataFile] {
         &self.inputs
@@ -87,7 +89,7 @@ impl RewriteDataFilesResult {
     }
 
     fn action(&self) -> OverwriteFilesAction {
-        OverwriteFilesAction::for_rewrite(&self.base, self.sequence_number)
+        OverwriteFilesAction::for_rewrite(&self.base, self.sequence_numbers.clone())
             .remove_data_files(self.inputs.clone())
             .add_data_files(self.outputs.clone())
     }

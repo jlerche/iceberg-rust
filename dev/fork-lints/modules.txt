@@ -5,3 +5,5 @@ crates/iceberg/src/transaction/rewrite_data_files/plan.rs
 crates/iceberg/src/transaction/rewrite_data_files/result.rs
 crates/iceberg/src/transaction/rewrite_data_files/prepared.rs
 crates/iceberg/src/transaction/rewrite_data_files/tests/controlled.rs
+crates/iceberg/src/transaction/rewrite_data_files/group.rs
+crates/iceberg/src/transaction/rewrite_data_files/tests/partitions.rs

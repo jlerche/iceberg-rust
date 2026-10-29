@@ -223,10 +223,12 @@ remains catalog-owned; preparation requires no prewritten table JSON location.
 A prepublication load alone cannot close a concurrent-publication race: the
 catalog still needs atomic requirements/compare-and-swap enforcement.
 
-Retain the narrow format matrix: main, unpartitioned v2, default-spec data files,
-and no live delete files. Reject duplicate, absent, or mismatched selected source
-descriptors. Output data sequence numbers inherit the minimum among the selected
-inputs; unselected files remain live with their original sequences/manifests.
+The supported matrix is main, v2, known partition specs with partition values
+compatible with the current schema, and no live delete files. Reject duplicate,
+absent, or mismatched selected source descriptors. Group selected inputs by the
+exact `(partition spec ID, partition value)` pair. Each output inherits its
+group's minimum input data sequence number; singleton groups and unselected
+files remain live with their original descriptors and sequences.
 A changed table identity, metadata location, schema, spec, or head requires
 replanning. This slice does not add safe concurrent rebasing or multiple-reference
 publication.
@@ -238,12 +240,56 @@ clean up uncertain artifacts. Durable wire formats for plans/results, distribute
 worker scheduling, comprehensive partial-artifact inventories, and automatic
 unknown-outcome recovery remain future work.
 
-Immediate follow-ups are partition-aware rewrite groups, bounded resource and
-artifact inventories, and adapter-level tests in the consuming project proving
-that its Iceberg pointer and Postgres/Kafka metadata move in one transaction.
-External logical change tracking and IVM remain outside this fork. File-level
+Immediate crate follow-ups are bounded execution and cancellation, staged-artifact
+inventories, and catalog/object-storage interoperability tests. External
+application transactions, logical change tracking, and IVM remain outside this fork. File-level
 snapshot diffs must expose physical replacement semantics rather than inventing
 logical stream changes.
+
+### Partition-aware compaction (2026-10-29)
+
+Plans expose `RewriteDataFilesGroup` values with their exact source descriptors,
+partition spec ID, full partition tuple, and minimum data sequence number. Group
+order follows the first selected input. Specs are never merged, even when their
+partition tuples compare equal; this also applies to historical specs after a
+default-spec change. All selected tuples are validated before execution.
+
+Execution plans scan tasks once, buffers the selected task descriptors, and
+executes multi-file groups sequentially using the existing partition-key-aware
+Parquet writer. Rows retain their source partition/spec. It does not repartition,
+change transforms, or recluster data. Singleton groups write nothing and are
+excluded from the result's removed inputs; if every group is a singleton,
+preparation returns no commit. Aggregate selected-descriptor limits and cancellation
+remain separate work; task buffering is not claimed to be resource-bounded.
+
+Publication preserves each group's minimum data sequence number on every output,
+assigns new file sequence numbers, and computes added-file summaries using each
+file's actual partition spec. The plan/execute/prepare/publish boundary and
+strict planning-base checks remain unchanged. Physical source-file deletion is
+still excluded.
+
+End-to-end coverage includes multiple partitions, null partition values,
+compound tuples, truncation transforms with distinct original values, selected
+groups, untouched singleton groups, mixed old/new specs with equal tuples,
+per-group sequence inheritance, partition summaries, predicate pruning, complete
+row multisets, and retained historical reads. v1/v3, live deletes, safe rebase,
+and partition-spec migration are not enabled by this slice.
+
+Partition-slice validation used parent `fda1cf122`, selected toolchain
+`nightly-2026-04-16`, and unchanged Cargo.lock blob
+`dcd6452de71a284c3b57ee0c90204c3efacad743`:
+
+- `cargo test --locked -p iceberg --lib --quiet`: 2,113 passed, one ignored.
+  Seven new partition tests exercise real Parquet and catalog publication.
+- `cargo test --locked -p iceberg --doc --quiet`: 89 passed, 14 ignored.
+- `make check-fork-lints`: passed, including ten checker self-tests and all
+  nine fork-owned files under 1,000 physical lines.
+- `cargo clippy --locked -p iceberg --all-targets --all-features -- -D warnings`:
+  passed with the default upstream configuration.
+- `make generate-public-api` and `make check-public-api`: passed; API growth
+  is limited to the group descriptor/getters and `RewriteDataFilesPlan::groups()`.
+- No external-reader, REST/RustFS, distributed-execution, or full-workspace
+  milestone validation is claimed by this local slice.
 
 ### Caller-controlled compaction validation
 

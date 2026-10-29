@@ -38,6 +38,7 @@
     clippy::wildcard_imports
 )]
 
+mod group;
 mod plan;
 mod prepared;
 mod result;
@@ -45,13 +46,14 @@ mod result;
 use std::collections::{HashMap, HashSet};
 
 use async_trait::async_trait;
+pub use group::RewriteDataFilesGroup;
 pub use plan::RewriteDataFilesPlan;
 pub use prepared::PreparedRewriteDataFiles;
 pub use result::RewriteDataFilesResult;
 
 use super::action::CommitStatus;
 use super::overwrite::OverwriteFilesState;
-use super::snapshot::current_manifests;
+use super::snapshot::{current_manifests, validate_partition_value};
 use super::{ActionCommit, TransactionAction};
 use crate::spec::{DataFile, FormatVersion, ManifestContentType};
 use crate::table::Table;
@@ -59,9 +61,9 @@ use crate::{Error, ErrorKind, Result};
 
 /// Plans row-preserving compaction against a pinned table state.
 ///
-/// Supports main on unpartitioned v2 tables without live delete files. All
-/// inputs must use the default spec. Output rolling uses the table's target
-/// Parquet file size. Fewer than two selected inputs produces no snapshot.
+/// Supports main on v2 tables without live delete files. Inputs are grouped by
+/// partition spec and partition value; singleton groups are left untouched.
+/// Output rolling uses the table's target Parquet file size.
 /// Any changed planning base requires replanning. Files are never deleted
 /// automatically, including after failed or ambiguous publication.
 ///
@@ -107,13 +109,9 @@ impl RewriteDataFilesAction {
     /// Returns an error for unsupported tables, live deletes, duplicate inputs,
     /// or selected descriptors that do not match live files.
     pub async fn plan(&self) -> Result<RewriteDataFilesPlan> {
-        let (files, sequence_number) = self.inputs(&self.base).await?;
+        let (files, sequence_numbers) = self.inputs(&self.base).await?;
         let files = self.select_inputs(files)?;
-        Ok(RewriteDataFilesPlan::new(
-            self.base.clone(),
-            files,
-            sequence_number,
-        ))
+        RewriteDataFilesPlan::new(self.base.clone(), files, &sequence_numbers)
     }
 
     fn select_inputs(&self, files: Vec<DataFile>) -> Result<Vec<DataFile>> {
@@ -134,30 +132,17 @@ impl RewriteDataFilesAction {
         Ok(selected.clone())
     }
 
-    async fn inputs(&self, table: &Table) -> Result<(Vec<DataFile>, i64)> {
+    async fn inputs(&self, table: &Table) -> Result<(Vec<DataFile>, HashMap<String, i64>)> {
         validate_base(&self.base, table)?;
-        if self.base.metadata().format_version() != FormatVersion::V2
-            || !self
-                .base
-                .metadata()
-                .default_partition_spec()
-                .fields()
-                .is_empty()
-        {
+        if self.base.metadata().format_version() != FormatVersion::V2 {
             return Err(Error::new(
                 ErrorKind::FeatureUnsupported,
-                "Compaction currently requires an unpartitioned v2 table",
+                "Compaction currently requires format v2",
             ));
         }
         let mut files = vec![];
-        let mut sequence_number = i64::MAX;
+        let mut sequence_numbers = HashMap::new();
         let mut paths = HashSet::new();
-        let selected_paths = self.selected.as_ref().map(|files| {
-            files
-                .iter()
-                .map(DataFile::file_path)
-                .collect::<HashSet<_>>()
-        });
         for descriptor in current_manifests(table).await? {
             let manifest = table.object_cache().get_manifest(&descriptor).await?;
             for entry in manifest.entries().iter().filter(|entry| entry.is_alive()) {
@@ -167,14 +152,18 @@ impl RewriteDataFilesAction {
                         "Compaction with live delete files is not yet supported",
                     ));
                 }
-                if entry.data_file().partition_spec_id
-                    != self.base.metadata().default_partition_spec_id()
-                {
-                    return Err(Error::new(
-                        ErrorKind::FeatureUnsupported,
-                        "Compaction requires all live data files to use the default partition spec",
-                    ));
-                }
+                let file = entry.data_file();
+                let spec = self
+                    .base
+                    .metadata()
+                    .partition_spec_by_id(file.partition_spec_id)
+                    .ok_or_else(|| {
+                        Error::new(ErrorKind::DataInvalid, "Unknown compaction partition spec")
+                    })?;
+                validate_partition_value(
+                    file.partition(),
+                    &spec.partition_type(self.base.metadata().current_schema())?,
+                )?;
                 if !paths.insert(entry.file_path().to_string()) {
                     return Err(Error::new(
                         ErrorKind::DataInvalid,
@@ -187,16 +176,11 @@ impl RewriteDataFilesAction {
                         "Compaction input lacks a valid data sequence number",
                     )
                 })?;
-                if selected_paths
-                    .as_ref()
-                    .is_none_or(|paths| paths.contains(entry.file_path()))
-                {
-                    sequence_number = sequence_number.min(sequence);
-                }
+                sequence_numbers.insert(entry.file_path().to_string(), sequence);
                 files.push(entry.data_file().clone());
             }
         }
-        Ok((files, sequence_number))
+        Ok((files, sequence_numbers))
     }
 }
 

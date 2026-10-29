@@ -96,6 +96,14 @@ fn row(id: Option<i32>, payload: Option<&str>) -> Row {
 }
 
 async fn write_rows(table: &Table, rows: &[Row]) -> Result<Vec<DataFile>> {
+    write_partition_rows(table, rows, None).await
+}
+
+async fn write_partition_rows(
+    table: &Table,
+    rows: &[Row],
+    partition: Option<crate::spec::PartitionKey>,
+) -> Result<Vec<DataFile>> {
     let batch = RecordBatch::try_new(
         Arc::new(ArrowSchema::try_from(
             table.metadata().current_schema().as_ref(),
@@ -112,7 +120,7 @@ async fn write_rows(table: &Table, rows: &[Row]) -> Result<Vec<DataFile>> {
     write_replacement_batches(
         table,
         table.metadata().current_schema().clone(),
-        None,
+        partition,
         futures::stream::iter([Ok(batch)]),
     )
     .await
@@ -123,7 +131,11 @@ async fn read_rows(table: &Table, snapshot_id: Option<i64>) -> Result<Vec<Row>> 
     if let Some(id) = snapshot_id {
         scan = scan.snapshot_id(id);
     }
-    let mut stream = scan.build()?.to_arrow().await?;
+    read_scan_rows(scan.build()?).await
+}
+
+async fn read_scan_rows(scan: crate::scan::TableScan) -> Result<Vec<Row>> {
+    let mut stream = scan.to_arrow().await?;
     let mut rows = vec![];
     while let Some(batch) = stream.try_next().await? {
         let ids = batch.column(0).as_primitive::<Int32Type>();
@@ -290,13 +302,9 @@ async fn compaction_rejects_concurrent_append() -> Result<()> {
 #[tokio::test]
 async fn compaction_rejects_unsupported_tables_before_reading_files() -> Result<()> {
     use crate::transaction::TransactionAction;
-    use crate::transaction::tests::{make_v1_table, make_v2_minimal_table, make_v3_minimal_table};
+    use crate::transaction::tests::{make_v1_table, make_v3_minimal_table};
 
-    for table in [
-        make_v1_table(),
-        make_v2_minimal_table(),
-        make_v3_minimal_table(),
-    ] {
+    for table in [make_v1_table(), make_v3_minimal_table()] {
         let action = Transaction::new(&table).rewrite_data_files();
         let mut state = action.new_state();
         let error = action
@@ -450,3 +458,5 @@ async fn compaction_reuses_output_files_across_publication_attempts() -> Result<
 }
 
 mod controlled;
+
+mod partitions;

@@ -15,36 +15,48 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::collections::HashSet;
+use std::collections::HashMap;
 
-use futures::{TryStreamExt, future};
+use futures::TryStreamExt;
 
-use super::{RewriteDataFilesResult, row_count};
-use crate::cow_rewrite::writer::build_replacement_writer;
+use super::group::group_files;
+use super::{RewriteDataFilesGroup, RewriteDataFilesResult};
+use crate::Result;
+use crate::scan::FileScanTask;
 use crate::spec::DataFile;
 use crate::table::Table;
-use crate::{Error, ErrorKind, Result};
 
-/// Pins the input files and table state for a row-preserving rewrite.
+/// Pins the input files and partition groups for a row-preserving rewrite.
 pub struct RewriteDataFilesPlan {
     base: Table,
     files: Vec<DataFile>,
-    sequence_number: i64,
+    groups: Vec<RewriteDataFilesGroup>,
 }
 
 impl RewriteDataFilesPlan {
-    pub(super) const fn new(base: Table, files: Vec<DataFile>, sequence_number: i64) -> Self {
-        Self {
+    pub(super) fn new(
+        base: Table,
+        files: Vec<DataFile>,
+        sequences: &HashMap<String, i64>,
+    ) -> Result<Self> {
+        let groups = group_files(&base, &files, sequences)?;
+        Ok(Self {
             base,
             files,
-            sequence_number,
-        }
+            groups,
+        })
     }
 
-    /// Returns the exact selected input descriptors.
+    /// Returns the selected descriptors, including singleton groups left untouched.
     #[must_use]
     pub fn input_files(&self) -> &[DataFile] {
         &self.files
+    }
+
+    /// Returns rewrite groups in first-input order, including singleton groups.
+    #[must_use]
+    pub fn groups(&self) -> &[RewriteDataFilesGroup] {
+        &self.groups
     }
 
     /// Returns the pinned source snapshot identifier.
@@ -55,66 +67,58 @@ impl RewriteDataFilesPlan {
 
     /// Writes replacement data files without writing snapshot metadata or publishing.
     ///
+    /// Groups run sequentially without mixing partitions or specs. Singleton
+    /// groups write no files and do not appear in the result's replaced inputs.
+    ///
     /// # Errors
     /// Returns scan, writer, or record-count validation errors. Partial output
     /// files are retained after errors or cancellation; callers own cleanup.
     pub async fn execute(self) -> Result<RewriteDataFilesResult> {
-        if self.files.len() < 2 {
-            return Ok(RewriteDataFilesResult::new(
-                self.base,
-                self.files,
-                vec![],
-                self.sequence_number,
-            ));
-        }
-        let expected_rows = row_count(&self.files)?;
-        let paths: HashSet<_> = self
-            .files
-            .iter()
-            .map(|file| file.file_path().to_string())
-            .collect();
-        let tasks = self
-            .base
-            .scan()
-            .build()?
-            .plan_files()
-            .await?
-            .try_filter(move |task| future::ready(paths.contains(task.data_file_path())));
-        let mut batches = self
-            .base
-            .reader_builder()
-            .build()
-            .read(Box::pin(tasks))?
-            .stream();
-        let mut writer = build_replacement_writer(
-            &self.base,
-            self.base.metadata().current_schema().clone(),
-            None,
-        )
-        .await?;
-        let mut rows = 0_u64;
-        while let Some(batch) = batches.try_next().await? {
-            rows = rows
-                .checked_add(u64::try_from(batch.num_rows())?)
-                .ok_or_else(|| {
-                    Error::new(ErrorKind::DataInvalid, "Compaction row count overflow")
-                })?;
-            if batch.num_rows() > 0 {
-                writer.write(batch).await?;
+        let tasks = self.tasks().await?;
+        let mut inputs = vec![];
+        let mut outputs = vec![];
+        let mut sequences = HashMap::new();
+        for (group, tasks) in self.groups.iter().zip(tasks) {
+            if group.files.len() < 2 {
+                continue;
             }
-        }
-        let outputs = writer.close().await?;
-        if rows != expected_rows || row_count(&outputs)? != expected_rows {
-            return Err(Error::new(
-                ErrorKind::DataInvalid,
-                "Compaction row count does not match source descriptors",
-            ));
+            let files = group.execute(&self.base, tasks).await?;
+            sequences.extend(
+                files
+                    .iter()
+                    .map(|file| (file.file_path().to_string(), group.sequence_number)),
+            );
+            outputs.extend(files);
+            inputs.extend(group.files.iter().cloned());
         }
         Ok(RewriteDataFilesResult::new(
-            self.base,
-            self.files,
-            outputs,
-            self.sequence_number,
+            self.base, inputs, outputs, sequences,
         ))
+    }
+
+    async fn tasks(&self) -> Result<Vec<Vec<FileScanTask>>> {
+        let mut tasks: Vec<Vec<FileScanTask>> = self.groups.iter().map(|_| vec![]).collect();
+        let paths: HashMap<_, _> = self
+            .groups
+            .iter()
+            .enumerate()
+            .filter(|(_, group)| group.files.len() >= 2)
+            .flat_map(|(index, group)| {
+                group
+                    .files
+                    .iter()
+                    .map(move |file| (file.file_path(), index))
+            })
+            .collect();
+        if paths.is_empty() {
+            return Ok(tasks);
+        }
+        let mut stream = self.base.scan().build()?.plan_files().await?;
+        while let Some(task) = stream.try_next().await? {
+            if let Some(index) = paths.get(task.data_file_path()).copied() {
+                tasks[index].push(task);
+            }
+        }
+        Ok(tasks)
     }
 }

@@ -252,11 +252,12 @@ fn build_summary(
     );
 
     for data_file in added_files {
-        collector.add_file(
-            data_file,
-            metadata.current_schema().clone(),
-            metadata.default_partition_spec().clone(),
-        );
+        let spec = metadata
+            .partition_spec_by_id(data_file.partition_spec_id)
+            .ok_or_else(|| {
+                invalid_data!("Unknown partition spec id {}", data_file.partition_spec_id)
+            })?;
+        collector.add_file(data_file, metadata.current_schema().clone(), spec.clone());
     }
 
     for data_file in removed_files {
