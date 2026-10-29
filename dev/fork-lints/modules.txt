@@ -15,3 +15,5 @@ crates/integration_tests/tests/rewrite_compaction/fixture.rs
 crates/integration_tests/tests/rewrite_compaction/faults.rs
 crates/integration_tests/tests/rewrite_compaction/lifecycle.rs
 crates/integration_tests/tests/rewrite_compaction/failures.rs
+crates/iceberg/src/transaction/rewrite_data_files/validation.rs
+crates/iceberg/src/transaction/rewrite_data_files/tests/rebase.rs

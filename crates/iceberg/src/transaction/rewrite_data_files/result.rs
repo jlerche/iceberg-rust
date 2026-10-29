@@ -22,7 +22,8 @@ use async_trait::async_trait;
 use super::super::action::CommitStatus;
 use super::super::overwrite::{OverwriteFilesAction, OverwriteFilesState};
 use super::super::{ActionCommit, TransactionAction};
-use super::{PreparedRewriteDataFiles, validate_base};
+use super::PreparedRewriteDataFiles;
+use super::validation::validate_publication;
 use crate::Result;
 use crate::spec::DataFile;
 use crate::table::Table;
@@ -79,15 +80,17 @@ impl RewriteDataFilesResult {
     ///
     /// Supply a freshly loaded table. This method does not load or update a
     /// catalog. Returns `None` for a validated no-op. The result can also be
-    /// applied to a transaction; that path never rewrites data files.
+    /// applied to a transaction; that path never rewrites data files. Append-only
+    /// descendants are accepted when all original files and their data sequences
+    /// remain unchanged and the writer configuration is unchanged.
     ///
     /// # Errors
-    /// Returns an error for a changed planning base, invalid input liveness,
-    /// or metadata-writing failure. No staged files are deleted on failure.
+    /// Returns an error for incompatible planning-base changes, invalid input
+    /// liveness, or metadata-writing failure. No staged files are deleted on failure.
     pub async fn prepare(&self, table: &Table) -> Result<Option<PreparedRewriteDataFiles>> {
         self.base.file_io().check_cancellation()?;
-        validate_base(&self.base, table)?;
         if !self.has_changes() {
+            validate_publication(&self.base, table).await?;
             return Ok(None);
         }
         let mut state = self.new_state();
@@ -99,8 +102,8 @@ impl RewriteDataFilesResult {
         PreparedRewriteDataFiles::new(tracked, commit).map(Some)
     }
 
-    fn action(&self) -> OverwriteFilesAction {
-        OverwriteFilesAction::for_rewrite(&self.base, self.sequence_numbers.clone())
+    fn action(&self, table: &Table) -> OverwriteFilesAction {
+        OverwriteFilesAction::for_rewrite(table, self.sequence_numbers.clone())
             .remove_data_files(self.inputs.clone())
             .add_data_files(self.outputs.clone())
     }
@@ -111,12 +114,12 @@ impl TransactionAction for RewriteDataFilesResult {
     type State = OverwriteFilesState;
 
     fn new_state(&self) -> Self::State {
-        self.action().new_state()
+        self.action(&self.base).new_state()
     }
 
     async fn commit(&self, state: &mut Self::State, table: &Table) -> Result<ActionCommit> {
         self.base.file_io().check_cancellation()?;
-        validate_base(&self.base, table)?;
+        validate_publication(&self.base, table).await?;
         if !self.has_changes() {
             return Ok(ActionCommit::new(vec![], vec![])
                 .with_cancellation(self.base.file_io().cancellation()));
@@ -125,7 +128,7 @@ impl TransactionAction for RewriteDataFilesResult {
         if let Some(token) = self.base.file_io().cancellation() {
             tracked = tracked.with_cancellation(token);
         }
-        let commit = self.action().commit(state, &tracked).await?;
+        let commit = self.action(&tracked).commit(state, &tracked).await?;
         self.base.file_io().check_cancellation()?;
         Ok(commit
             .with_artifacts(self.artifacts())

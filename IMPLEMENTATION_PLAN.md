@@ -170,20 +170,23 @@ and readjust fork changes afterward, even when substantial rework is required.
    unpartitioned v2 table without live deletes, using the existing Parquet
    writer and a standard `replace` snapshot. It owns row-preserving execution
    rather than accepting caller-transformed output. Outputs inherit the minimum
-   input data sequence number and receive new file sequence numbers. A changed
-   planning base requires replanning. Caller-selected file sets and explicit
+   input data sequence number and receive new file sequence numbers. Completed
+   outputs support explicit revalidation against compatible append-only
+   descendants. Caller-selected file sets and explicit
    execution/preparation/publication are available through the staged API below.
    Repartitioning,
-   reclustering, safe concurrent rebase, applicable-delete reconciliation, and v3
+   reclustering, general concurrent rebase, applicable-delete reconciliation, and v3
    lineage support remain follow-up work.
 
 The initial overwrite action does not provide prepare/publish APIs, named-branch
 mutation, lost-response success recovery, bounded metadata streaming, or safe
 physical artifact cleanup. Existing transaction error handling still applies;
 never delete artifacts based only on a failed or ambiguous commit response.
-Any changed planning base requires a fresh rewrite plan rather than automatic
-rebase. Wider multi-action snapshot composition remains gated on shared-base
-catalog requirement compilation in A.
+Logical overwrite still requires a fresh plan after any base change. Completed
+compaction outputs can be explicitly prepared against a compatible append-only
+descendant; prepared commits remain pinned and publication never rebases
+automatically. Wider multi-action snapshot composition remains gated on
+shared-base catalog requirement compilation in A.
 
 Core entry points are `crates/iceberg/src/transaction/overwrite.rs`,
 `transaction/snapshot/`, `cow_rewrite/`, and the existing manifest writers.
@@ -215,7 +218,7 @@ table. A no-op produces no prepared commit. The existing one-call transaction
 API remains a convenience wrapper over the same stages, and an executed result
 can be applied to a transaction without repeating data execution.
 
-`PreparedRewriteDataFiles` exposes the source metadata location, source snapshot,
+`PreparedRewriteDataFiles` exposes the validated publication-base metadata location and snapshot,
 and full prepared snapshot identity for downstream compare-and-swap and recovery.
 A catalog adapter must validate standard requirements and the protected metadata
 base atomically with application metadata. Catalog-owned metadata JSON persistence
@@ -229,9 +232,13 @@ absent, or mismatched selected source descriptors. Group selected inputs by the
 exact `(partition spec ID, partition value)` pair. Each output inherits its
 group's minimum input data sequence number; singleton groups and unselected
 files remain live with their original descriptors and sequences.
-A changed table identity, metadata location, schema, spec, or head requires
-replanning. This slice does not add safe concurrent rebasing or multiple-reference
-publication.
+A changed table identity, location, schema, partition specs, default sort order,
+or table properties requires replanning. Completed outputs may be prepared against
+a refreshed append-only descendant with retained ancestry, unchanged original
+files and data sequences, and no live deletes. Preparation rebuilds metadata
+against that refreshed head while retaining immutable data outputs. A prepared
+commit is pinned to its publication base; subsequent head changes require
+preparation again. General rebasing and multiple-reference publication remain deferred.
 
 No stage physically deletes source or staged artifacts. A prepared publication
 is submitted once; ambiguous outcomes require caller recovery using the recorded
@@ -240,8 +247,10 @@ clean up uncertain artifacts. Durable wire formats for plans/results, distribute
 worker scheduling, comprehensive partial-artifact inventories, and automatic
 unknown-outcome recovery remain future work.
 
-Immediate crate follow-ups are bounded execution and cancellation, staged-artifact
-inventories, and catalog/object-storage interoperability tests. External
+Completed crate follow-ups include bounded group execution, cooperative
+cancellation, staged-artifact inventories, and REST/RustFS lifecycle tests.
+Safe preparation after disjoint concurrent appends is implemented; independent
+external-reader interoperability and full-workspace milestone gates remain pending. External
 application transactions, logical change tracking, and IVM remain outside this fork. File-level
 snapshot diffs must expose physical replacement semantics rather than inventing
 logical stream changes.
@@ -1279,6 +1288,14 @@ add explicit supported modes before using it for those operations.
 
 ### Milestone H: `RewriteDataFiles` without applicable deletes
 
+Core delivery status: caller-selected row-preserving execution, partition/spec
+grouping, optional file/byte group limits, staged preparation/publication,
+artifact inventories, cancellation, and explicit revalidation after compatible
+concurrent appends are implemented and tested. REST/RustFS lifecycle coverage is
+implemented. Reclustering, size/bounds/age selection policies, full-plan descriptor
+limits, external-reader validation, and the companion DataFusion work below
+remain open; this does not mark the whole milestone complete.
+
 #### Work
 
 1. Add the distinct `RewriteDataFiles` action with standard replace semantics.
@@ -2093,3 +2110,47 @@ stack. Formatting, scoped Clippy, checker self-tests, and the 1,000-line gate
 pass for all seventeen registered fork-owned files. No library API is added.
 Full-workspace checks, external-reader interoperability, wire-level response
 loss, and production Postgres coordination remain outside this test slice.
+
+
+## Safe preparation after concurrent appends (2026-10-29)
+
+Completed `RewriteDataFilesResult` outputs can now be passed to
+`prepare(fresh_table)` or applied to a transaction created from that refreshed
+table after intervening disjoint appends. An append in the same partition is
+allowed: disjointness concerns immutable file paths, not partition values.
+Data files are reused; snapshot metadata is rebuilt against the refreshed head.
+The prepared base accessors identify that publication base, while the plan's
+base accessor continues identifying the original execution snapshot.
+
+Validation requires retained append-only ancestry back to the exact original
+snapshot, unchanged table identity/location/format, current schema, partition
+specs, default sort order, and table properties. Every original live data file,
+including unselected files, must retain its descriptor and data sequence. Live
+deletes remain unsupported. Missing ancestry, overwrite/delete/replace steps,
+changed descriptors/sequences, or incompatible configuration require replanning
+before metadata is written. This is deliberately stricter than general rebasing.
+
+Publication remains single-shot. A change after preparation fails its original
+head requirement; the caller can reload and explicitly prepare the retained
+execution result again after a definitive conflict. An ambiguous submitted
+outcome still requires recovery and protects staged artifacts. No automatic
+retries, physical cleanup, or downstream coordination are added.
+
+Validation from parent `92b587240`, with the pinned toolchain and unchanged
+Cargo.lock:
+
+- Core library: 2,136 passed, one ignored; seven new revalidation tests replace
+  the obsolete append-rejection test. Existing prepared-commit conflict and
+  unknown-outcome tests continue passing.
+- Documentation: 89 passed, 14 ignored.
+- REST/RustFS: all eight lifecycle tests passed, including stale prepared-commit
+  rejection followed by explicit re-preparation after appends in both the same
+  and a different partition, preserving exact rows and historical reads.
+- `make check-fork-lints`: passed, including nineteen registered fork-owned
+  files below 1,000 lines, formatting, and checker self-tests.
+- Independent review found no actionable semantic issues and independently ran
+  all seven revalidation tests plus the REST re-preparation regression.
+
+Default core Clippy, API generation, and `make check-public-api` passed; all
+public API snapshots remain unchanged. External-reader interoperability and
+full-workspace milestone checks remain pending.

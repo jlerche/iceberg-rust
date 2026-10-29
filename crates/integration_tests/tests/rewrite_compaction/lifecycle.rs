@@ -248,7 +248,7 @@ fn rest_catalog_allows_only_one_competing_prepared_rewrite() -> Result<()> {
 }
 
 #[test]
-fn rest_rejects_stale_rewrite_after_append() -> Result<()> {
+fn rest_reprepares_after_append_without_reexecuting_data() -> Result<()> {
     super::fixture::run(async {
         let mut fixture = Fixture::new().await?;
         fixture.seed().await?;
@@ -260,6 +260,7 @@ fn rest_rejects_stale_rewrite_after_append() -> Result<()> {
             .await?;
         let prepared = result.prepare(&fixture.table).await?.ok_or_else(missing)?;
         fixture.append(&[row(Some(9), Some("concurrent"))]).await?;
+        fixture.append(&[row(Some(1), Some("duplicate"))]).await?;
         assert!(
             fixture
                 .catalog
@@ -272,7 +273,36 @@ fn rest_rejects_stale_rewrite_after_append() -> Result<()> {
             (fresh.metadata(), read(&fresh, None).await?),
             (fixture.table.metadata(), read(&fixture.table, None).await?)
         );
-        retained(&fresh, result.artifacts().paths()).await?;
+        let expected = vec![
+            row(None, Some("duplicate")),
+            row(None, Some("duplicate")),
+            row(Some(1), Some("duplicate")),
+            row(Some(1), Some("duplicate")),
+            row(Some(1), Some("duplicate")),
+            row(Some(9), Some("concurrent")),
+        ];
+        let outputs = result.output_files().to_vec();
+        let prepared = result.prepare(&fresh).await?.ok_or_else(missing)?;
+        assert_eq!(
+            prepared.base_snapshot_id(),
+            fresh.metadata().current_snapshot_id()
+        );
+        let committed = prepared.publish(fixture.catalog.as_ref()).await?;
+        assert_eq!(
+            (
+                read(&committed, None).await?,
+                read(&committed, fresh.metadata().current_snapshot_id()).await?
+            ),
+            (expected.clone(), expected)
+        );
+        let live_outputs = live(&committed)
+            .await?
+            .into_iter()
+            .filter(|(_, entry)| outputs.contains(entry.data_file()))
+            .map(|(_, entry)| entry.data_file().clone())
+            .collect::<Vec<_>>();
+        assert_eq!(live_outputs, outputs);
+        retained(&committed, result.artifacts().paths()).await?;
         fixture.cleanup().await
     })
 }

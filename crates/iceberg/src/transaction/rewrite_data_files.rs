@@ -42,6 +42,7 @@ mod group;
 mod plan;
 mod prepared;
 mod result;
+mod validation;
 
 use std::collections::{HashMap, HashSet};
 
@@ -64,7 +65,8 @@ use crate::{Error, ErrorKind, Result};
 /// Supports main on v2 tables without live delete files. Inputs are grouped by
 /// partition spec and partition value; singleton groups are left untouched.
 /// Output rolling uses the table's target Parquet file size.
-/// Any changed planning base requires replanning. Files are never deleted
+/// Completed outputs can be prepared against append-only descendants. Other
+/// planning-base changes require replanning. Files are never deleted
 /// automatically, including after failed or ambiguous publication.
 ///
 /// ```no_run

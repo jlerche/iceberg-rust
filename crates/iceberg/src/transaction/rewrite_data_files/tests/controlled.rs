@@ -175,43 +175,6 @@ async fn selected_rewrite_preserves_unselected_files_and_selected_data_age() -> 
 }
 
 #[tokio::test]
-async fn execution_result_rejects_changed_base_without_removing_outputs() -> Result<()> {
-    let mut fixture = Fixture::new().await?;
-    fixture.append(&[row(Some(1), None)]).await?;
-    fixture.append(&[row(Some(2), None)]).await?;
-    let result = Transaction::new(&fixture.table)
-        .rewrite_data_files()
-        .plan()
-        .await?
-        .execute()
-        .await?;
-    fixture.append(&[row(Some(3), Some("concurrent"))]).await?;
-    let error = result
-        .prepare(&fixture.table)
-        .await
-        .err()
-        .ok_or_else(missing_prepared)?;
-    let stored = fixture
-        .catalog
-        .load_table(fixture.table.identifier())
-        .await?;
-    assert_eq!(
-        (error.kind(), stored.metadata()),
-        (ErrorKind::PreconditionFailed, fixture.table.metadata())
-    );
-    for output in result.output_files() {
-        assert!(
-            stored
-                .file_io()
-                .new_input(output.file_path())?
-                .exists()
-                .await?
-        );
-    }
-    Ok(())
-}
-
-#[tokio::test]
 async fn prepared_commit_requirements_reject_concurrent_publication() -> Result<()> {
     let mut fixture = Fixture::new().await?;
     fixture.append(&[row(Some(1), None)]).await?;

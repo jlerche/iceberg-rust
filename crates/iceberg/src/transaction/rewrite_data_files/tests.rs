@@ -462,3 +462,5 @@ mod controlled;
 mod partitions;
 
 mod cancellation;
+
+mod rebase;

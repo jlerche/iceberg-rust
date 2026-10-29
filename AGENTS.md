@@ -83,6 +83,10 @@ trust assumptions, and non-boundaries.
   Reuse upstream COW, manifest, and transaction primitives rather than building
   speculative frameworks before a working mutation path.
 
+Keep `IMPLEMENTATION_PLAN.md` current with each implementation slice. Mark
+completed work and recorded validation explicitly, and distinguish remaining
+work and unrun checks from delivered behavior.
+
 ## Fork Rust quality gate
 
 Use pgderive's Clippy policy for new fork modules: deny `all`, `pedantic`, and

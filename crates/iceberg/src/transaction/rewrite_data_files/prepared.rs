@@ -70,13 +70,13 @@ impl PreparedRewriteDataFiles {
         &self.snapshot
     }
 
-    /// Returns the original metadata location for catalog compare-and-swap.
+    /// Returns the validated publication-base metadata location for catalog compare-and-swap.
     #[must_use]
     pub fn base_metadata_location(&self) -> Option<&str> {
         self.base.metadata_location()
     }
 
-    /// Returns the pinned source snapshot identifier.
+    /// Returns the validated publication-base snapshot identifier.
     #[must_use]
     pub fn base_snapshot_id(&self) -> Option<i64> {
         self.base.metadata().current_snapshot_id()
