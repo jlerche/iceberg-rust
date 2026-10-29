@@ -207,6 +207,11 @@ pub struct Table {
 }
 
 impl Table {
+    pub(crate) fn track_outputs(mut self, inventory: crate::io::ArtifactInventory) -> Self {
+        self.file_io = self.file_io.clone().track_outputs(inventory);
+        self
+    }
+
     /// Sets the [`Table`] metadata and returns an updated instance with the new metadata applied.
     pub(crate) fn with_metadata(mut self, metadata: TableMetadataRef) -> Self {
         self.metadata = metadata;

@@ -249,11 +249,15 @@ impl Transaction {
         }
 
         let mut current_table = self.table.clone();
+        let mut artifact_inventories = vec![];
         let mut existing_updates: Vec<TableUpdate> = vec![];
         let mut existing_requirements: Vec<TableRequirement> = vec![];
 
         for entry in self.actions.iter_mut() {
-            let action_commit = entry.commit(&current_table).await?;
+            let mut action_commit = entry.commit(&current_table).await?;
+            if let Some(inventory) = action_commit.take_artifacts() {
+                artifact_inventories.push(inventory);
+            }
             // apply action commit to current_table
             current_table = Self::apply(
                 current_table,
@@ -269,6 +273,9 @@ impl Transaction {
             .requirements(existing_requirements)
             .build();
 
+        for inventory in artifact_inventories {
+            inventory.protect();
+        }
         catalog.update_table(table_commit).await
     }
 }

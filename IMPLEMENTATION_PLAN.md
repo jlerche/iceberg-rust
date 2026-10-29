@@ -1953,3 +1953,39 @@ From parent `57f360a32`, with the pinned toolchain and unchanged lockfile:
 - 89 doc tests passed (14 ignored); default and scoped Clippy, formatting,
   file-length checks, API generation and API consistency checks passed.
 - Full-plan descriptor limits and cancellation are not implemented in this slice.
+
+## Staged-artifact inventory slice (2026-10-29)
+
+Retain `plan.artifacts()` before consuming a rewrite plan. The shared,
+process-local `ArtifactInventory` remains available when execution fails or its
+future is dropped. Results and prepared commits expose the same inventory.
+Preparation records manifests and manifest lists in that handle as well.
+
+Tracking is attached only to the operation's FileIO clones. Output paths are
+registered before backend allocation, including paths whose allocation or writes
+fail. Entries are conservative candidates: they may be absent, partial, or
+complete. Existing source paths are not registered; catalog-owned metadata JSON
+and backend-owned temporary/multipart objects are outside the client inventory.
+The inventory is not an ownership proof or permission to delete an object.
+
+Before a prepared request is submitted, transferred as a raw TableCommit, or
+submitted by the transaction convenience path, its shared inventory is marked
+publication-protected. Protection remains set after success, ambiguous errors,
+or cancellation. No automatic retry, deletion, or outcome inference is added.
+Unprotected does not imply safe deletion; retained snapshots and shared uses
+still require caller validation. Wire persistence, completion-state classification,
+and automatic recovery remain future work.
+
+Failure tests cover storage writer creation errors, execution count-validation
+failure after output writing, metadata preparation failure, and a lost response
+after successful publication. They verify retained candidate paths, unchanged
+catalog state on prepublication errors, source exclusion, and protection of
+possibly published artifacts.
+
+Validation from parent `69665a4c9` with the pinned toolchain and unchanged
+lockfile: 2,119 core tests passed (one ignored), 89 doc tests passed (14 ignored),
+and default/scoped Clippy, formatting, ten checker self-tests, and all ten
+fork-owned file-length checks passed. API generation and `make check-public-api` passed; additions are the inventory
+handle and plan/result/prepared inventory accessors. External-store failure
+injection, durable recovery, explicit completion states, and automatic cleanup
+remain outside this slice.

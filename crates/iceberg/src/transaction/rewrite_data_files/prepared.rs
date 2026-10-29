@@ -58,6 +58,12 @@ impl PreparedRewriteDataFiles {
         })
     }
 
+    /// Returns the shared staged-output inventory.
+    #[must_use]
+    pub fn artifacts(&self) -> crate::io::ArtifactInventory {
+        self.base.file_io().inventory().unwrap_or_default()
+    }
+
     /// Returns the prepared snapshot identity and manifest-list location.
     #[must_use]
     pub const fn snapshot(&self) -> &Snapshot {
@@ -79,6 +85,7 @@ impl PreparedRewriteDataFiles {
     /// Transfers the standard commit to the caller's catalog or atomic coordinator.
     #[must_use]
     pub fn into_table_commit(self) -> TableCommit {
+        self.artifacts().protect();
         self.commit
     }
 
@@ -90,6 +97,7 @@ impl PreparedRewriteDataFiles {
     pub async fn publish(self, catalog: &dyn Catalog) -> Result<Table> {
         let fresh = catalog.load_table(self.base.identifier()).await?;
         validate_base(&self.base, &fresh)?;
+        self.artifacts().protect();
         catalog.update_table(self.commit).await
     }
 }

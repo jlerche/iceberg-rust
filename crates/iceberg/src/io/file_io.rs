@@ -67,6 +67,7 @@ pub struct FileIO {
     factory: Arc<dyn StorageFactory>,
     /// Cached storage instance (lazily initialized)
     storage: Arc<OnceLock<Arc<dyn Storage>>>,
+    inventory: Option<super::ArtifactInventory>,
 }
 
 mod _serde {
@@ -98,6 +99,7 @@ impl FileIO {
             config: StorageConfig::new(),
             factory: Arc::new(MemoryStorageFactory),
             storage: Arc::new(OnceLock::new()),
+            inventory: None,
         }
     }
 
@@ -109,6 +111,7 @@ impl FileIO {
             config: StorageConfig::new(),
             factory: Arc::new(LocalFsStorageFactory),
             storage: Arc::new(OnceLock::new()),
+            inventory: None,
         }
     }
 
@@ -145,7 +148,17 @@ impl FileIO {
             config,
             factory,
             storage: Arc::new(OnceLock::new()),
+            inventory: None,
         })
+    }
+
+    pub(crate) fn track_outputs(mut self, inventory: super::ArtifactInventory) -> Self {
+        self.inventory = Some(inventory);
+        self
+    }
+
+    pub(crate) fn inventory(&self) -> Option<super::ArtifactInventory> {
+        self.inventory.clone()
     }
 
     /// Get the storage configuration.
@@ -233,6 +246,9 @@ impl FileIO {
     ///
     /// * path: It should be *absolute* path starting with scheme string used to construct [`FileIO`].
     pub fn new_output(&self, path: impl AsRef<str>) -> Result<OutputFile> {
+        if let Some(inventory) = &self.inventory {
+            inventory.register(path.as_ref());
+        }
         self.get_storage()?.new_output(path.as_ref())
     }
 }
@@ -286,6 +302,7 @@ impl FileIOBuilder {
             config: self.config,
             factory: self.factory,
             storage: Arc::new(OnceLock::new()),
+            inventory: None,
         }
     }
 }

@@ -325,10 +325,12 @@ async fn executed_result_applies_without_rewriting_data() -> Result<()> {
         .await?
         .execute()
         .await?;
+    let inventory = result.artifacts();
     let outputs = result.output_files().to_vec();
     let data_paths = fixture_files(base, "data")?;
     let tx = Transaction::new(base);
     let committed = result.apply(tx)?.commit(&fixture.catalog).await?;
+    assert!(inventory.publication_protected());
     let live = live_entries(&committed)
         .await?
         .iter()
@@ -416,12 +418,14 @@ async fn publication_does_not_retry_a_lost_success_response() -> Result<()> {
                 Err(Error::new(ErrorKind::Unexpected, "Lost catalog response").with_retryable(true))
             })
         });
+    let publication_inventory = prepared.artifacts();
     let error = prepared
         .publish(&catalog)
         .await
         .err()
         .ok_or_else(missing_prepared)?;
     let fresh = stored.load_table(base.identifier()).await?;
+    assert!(publication_inventory.publication_protected());
     assert_eq!(
         (
             error.kind(),
@@ -522,6 +526,123 @@ async fn byte_limits_and_invalid_limits_are_checked_before_execution() -> Result
         .catalog
         .load_table(fixture.table.identifier())
         .await?;
+    assert_eq!(stored.metadata(), fixture.table.metadata());
+    Ok(())
+}
+
+#[tokio::test]
+async fn artifact_inventory_covers_data_metadata_and_publication_protection() -> Result<()> {
+    let mut fixture = Fixture::new().await?;
+    fixture.append(&[row(Some(1), None)]).await?;
+    fixture.append(&[row(Some(2), None)]).await?;
+    let plan = Transaction::new(&fixture.table)
+        .rewrite_data_files()
+        .plan()
+        .await?;
+    let inventory = plan.artifacts();
+    assert!(inventory.paths().is_empty());
+    let result = plan.execute().await?;
+    let expected: std::collections::BTreeSet<_> = result
+        .output_files()
+        .iter()
+        .map(|file| file.file_path().to_string())
+        .collect();
+    assert_eq!(
+        inventory
+            .paths()
+            .into_iter()
+            .collect::<std::collections::BTreeSet<_>>(),
+        expected
+    );
+    let prepared = result
+        .prepare(&fixture.table)
+        .await?
+        .ok_or_else(missing_prepared)?;
+    assert!(
+        inventory
+            .paths()
+            .contains(&prepared.snapshot().manifest_list().to_string())
+    );
+    assert!(!inventory.publication_protected());
+    let _commit = prepared.into_table_commit();
+    assert!(inventory.publication_protected());
+    for input in result.input_files() {
+        assert!(!inventory.paths().contains(&input.file_path().to_string()));
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn failed_execution_retains_allocated_output_inventory() -> Result<()> {
+    use crate::transaction::ApplyTransactionAction;
+    let mut fixture = Fixture::new().await?;
+    fixture.append(&[row(Some(1), None)]).await?;
+    let mut files = super::write_rows(&fixture.table, &[row(Some(2), None)]).await?;
+    for file in &mut files {
+        file.record_count += 1;
+    }
+    let tx = Transaction::new(&fixture.table);
+    let base = tx
+        .fast_append()
+        .add_data_files(files)
+        .apply(tx)?
+        .commit(&fixture.catalog)
+        .await?;
+    let plan = Transaction::new(&base).rewrite_data_files().plan().await?;
+    let inventory = plan.artifacts();
+    assert!(plan.execute().await.is_err());
+    assert!(!inventory.paths().is_empty());
+    assert!(!inventory.publication_protected());
+    let fresh = fixture.catalog.load_table(base.identifier()).await?;
+    assert_eq!(fresh.metadata(), base.metadata());
+    Ok(())
+}
+
+#[tokio::test]
+async fn failed_metadata_preparation_retains_attempted_manifest_paths() -> Result<()> {
+    use std::collections::HashMap;
+    use std::sync::Arc;
+    let mut fixture = Fixture::new().await?;
+    fixture.append(&[row(Some(1), None)]).await?;
+    fixture.append(&[row(Some(2), None)]).await?;
+    let failed_storage = tempfile::TempDir::new()?;
+    let blocked = failed_storage.path().join("blocked-metadata");
+    std::fs::write(&blocked, b"not a directory")?;
+    let prefix = blocked.to_string_lossy().into_owned();
+    let metadata = fixture
+        .table
+        .metadata()
+        .clone()
+        .into_builder(None)
+        .set_properties(HashMap::from([(
+            "write.metadata.path".to_string(),
+            prefix.clone(),
+        )]))?
+        .build()?
+        .metadata;
+    let table = fixture.table.clone().with_metadata(Arc::new(metadata));
+    let result = Transaction::new(&table)
+        .rewrite_data_files()
+        .plan()
+        .await?
+        .execute()
+        .await?;
+    let inventory = result.artifacts();
+    let data_paths = inventory.paths();
+    assert!(result.prepare(&table).await.is_err());
+    assert!(
+        inventory
+            .paths()
+            .iter()
+            .any(|path| path.starts_with(&prefix))
+    );
+    assert!(
+        data_paths
+            .iter()
+            .all(|path| inventory.paths().contains(path))
+    );
+    assert!(!inventory.publication_protected());
+    let stored = fixture.catalog.load_table(table.identifier()).await?;
     assert_eq!(stored.metadata(), fixture.table.metadata());
     Ok(())
 }

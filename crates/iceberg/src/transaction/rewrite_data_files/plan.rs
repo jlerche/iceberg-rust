@@ -40,6 +40,7 @@ impl RewriteDataFilesPlan {
         files: Vec<DataFile>,
         sequences: &HashMap<String, i64>,
     ) -> Result<Self> {
+        let base = base.track_outputs(crate::io::ArtifactInventory::default());
         let groups = group_files(&base, &files, sequences)?;
         Ok(Self {
             base,
@@ -71,6 +72,12 @@ impl RewriteDataFilesPlan {
             .flatten()
             .collect();
         Ok(self)
+    }
+
+    /// Returns a shared output inventory to retain across execution failures.
+    #[must_use]
+    pub fn artifacts(&self) -> crate::io::ArtifactInventory {
+        self.base.file_io().inventory().unwrap_or_default()
     }
 
     /// Returns the selected descriptors, including singleton groups left untouched.

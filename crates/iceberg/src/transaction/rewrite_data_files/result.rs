@@ -51,6 +51,12 @@ impl RewriteDataFilesResult {
         }
     }
 
+    /// Returns outputs allocated during execution and subsequent preparation.
+    #[must_use]
+    pub fn artifacts(&self) -> crate::io::ArtifactInventory {
+        self.base.file_io().inventory().unwrap_or_default()
+    }
+
     /// Returns the source files replaced by completed multi-file groups.
     #[must_use]
     pub fn input_files(&self) -> &[DataFile] {
@@ -84,8 +90,9 @@ impl RewriteDataFilesResult {
             return Ok(None);
         }
         let mut state = self.new_state();
-        let commit = self.commit(&mut state, table).await?;
-        PreparedRewriteDataFiles::new(table.clone(), commit).map(Some)
+        let tracked = table.clone().track_outputs(self.artifacts());
+        let commit = self.commit(&mut state, &tracked).await?;
+        PreparedRewriteDataFiles::new(tracked, commit).map(Some)
     }
 
     fn action(&self) -> OverwriteFilesAction {
@@ -108,7 +115,12 @@ impl TransactionAction for RewriteDataFilesResult {
         if !self.has_changes() {
             return Ok(ActionCommit::new(vec![], vec![]));
         }
-        self.action().commit(state, table).await
+        let tracked = table.clone().track_outputs(self.artifacts());
+        Ok(self
+            .action()
+            .commit(state, &tracked)
+            .await?
+            .with_artifacts(self.artifacts()))
     }
 
     async fn cleanup(self, _state: Self::State, _table: &Table, _status: CommitStatus) {}

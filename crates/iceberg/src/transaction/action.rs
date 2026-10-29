@@ -224,16 +224,26 @@ impl<T: TransactionAction> ApplyTransactionAction for T {
 /// This struct contains the updates to apply to the table's metadata
 /// and any preconditions that must be satisfied before the update can be committed.
 pub struct ActionCommit {
+    artifacts: Option<crate::io::ArtifactInventory>,
     updates: Vec<TableUpdate>,
     requirements: Vec<TableRequirement>,
 }
 
 impl ActionCommit {
+    pub(crate) fn with_artifacts(mut self, artifacts: crate::io::ArtifactInventory) -> Self {
+        self.artifacts = Some(artifacts);
+        self
+    }
+    pub(crate) fn take_artifacts(&mut self) -> Option<crate::io::ArtifactInventory> {
+        self.artifacts.take()
+    }
+
     /// Creates a new `ActionCommit` from the given updates and requirements.
     pub fn new(updates: Vec<TableUpdate>, requirements: Vec<TableRequirement>) -> Self {
         Self {
             updates,
             requirements,
+            artifacts: None,
         }
     }
 
