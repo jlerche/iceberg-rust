@@ -105,3 +105,12 @@ and their test files there; shared/upstream modules remain outside that gate.
 The imported checker supports a justified `// pgderive: max-lines=N -- reason`
 within the first ten lines. Prefer splitting a fork module over an exception.
 The checker defaults to that fork-owned list, including when run directly.
+
+## Independent review before commits
+
+Before every future commit, request an independent sub-agent review of the
+proposed changes. Reviewers must not implement the changes they review. Resolve
+or explicitly document actionable findings, rerun affected checks, and obtain
+review of substantive follow-up fixes before committing. Keep reviews local;
+never open an upstream PR. Review the accumulated fork implementation when
+requested as well as the current change.

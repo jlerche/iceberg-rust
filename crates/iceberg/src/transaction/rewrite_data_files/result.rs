@@ -85,12 +85,16 @@ impl RewriteDataFilesResult {
     /// Returns an error for a changed planning base, invalid input liveness,
     /// or metadata-writing failure. No staged files are deleted on failure.
     pub async fn prepare(&self, table: &Table) -> Result<Option<PreparedRewriteDataFiles>> {
+        self.base.file_io().check_cancellation()?;
         validate_base(&self.base, table)?;
         if !self.has_changes() {
             return Ok(None);
         }
         let mut state = self.new_state();
-        let tracked = table.clone().track_outputs(self.artifacts());
+        let mut tracked = table.clone().track_outputs(self.artifacts());
+        if let Some(token) = self.base.file_io().cancellation() {
+            tracked = tracked.with_cancellation(token);
+        }
         let commit = self.commit(&mut state, &tracked).await?;
         PreparedRewriteDataFiles::new(tracked, commit).map(Some)
     }
@@ -111,16 +115,21 @@ impl TransactionAction for RewriteDataFilesResult {
     }
 
     async fn commit(&self, state: &mut Self::State, table: &Table) -> Result<ActionCommit> {
+        self.base.file_io().check_cancellation()?;
         validate_base(&self.base, table)?;
         if !self.has_changes() {
-            return Ok(ActionCommit::new(vec![], vec![]));
+            return Ok(ActionCommit::new(vec![], vec![])
+                .with_cancellation(self.base.file_io().cancellation()));
         }
-        let tracked = table.clone().track_outputs(self.artifacts());
-        Ok(self
-            .action()
-            .commit(state, &tracked)
-            .await?
-            .with_artifacts(self.artifacts()))
+        let mut tracked = table.clone().track_outputs(self.artifacts());
+        if let Some(token) = self.base.file_io().cancellation() {
+            tracked = tracked.with_cancellation(token);
+        }
+        let commit = self.action().commit(state, &tracked).await?;
+        self.base.file_io().check_cancellation()?;
+        Ok(commit
+            .with_artifacts(self.artifacts())
+            .with_cancellation(self.base.file_io().cancellation()))
     }
 
     async fn cleanup(self, _state: Self::State, _table: &Table, _status: CommitStatus) {}

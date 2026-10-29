@@ -207,6 +207,11 @@ pub struct Table {
 }
 
 impl Table {
+    pub(crate) fn with_cancellation(mut self, token: crate::io::CancellationToken) -> Self {
+        self.file_io = self.file_io.clone().with_cancellation(token);
+        self
+    }
+
     pub(crate) fn track_outputs(mut self, inventory: crate::io::ArtifactInventory) -> Self {
         self.file_io = self.file_io.clone().track_outputs(inventory);
         self

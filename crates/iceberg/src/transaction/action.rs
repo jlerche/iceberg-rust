@@ -224,12 +224,24 @@ impl<T: TransactionAction> ApplyTransactionAction for T {
 /// This struct contains the updates to apply to the table's metadata
 /// and any preconditions that must be satisfied before the update can be committed.
 pub struct ActionCommit {
+    cancellation: Option<crate::io::CancellationToken>,
     artifacts: Option<crate::io::ArtifactInventory>,
     updates: Vec<TableUpdate>,
     requirements: Vec<TableRequirement>,
 }
 
 impl ActionCommit {
+    pub(crate) fn with_cancellation(
+        mut self,
+        cancellation: Option<crate::io::CancellationToken>,
+    ) -> Self {
+        self.cancellation = cancellation;
+        self
+    }
+    pub(crate) fn take_cancellation(&mut self) -> Option<crate::io::CancellationToken> {
+        self.cancellation.take()
+    }
+
     pub(crate) fn with_artifacts(mut self, artifacts: crate::io::ArtifactInventory) -> Self {
         self.artifacts = Some(artifacts);
         self
@@ -244,6 +256,7 @@ impl ActionCommit {
             updates,
             requirements,
             artifacts: None,
+            cancellation: None,
         }
     }
 

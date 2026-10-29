@@ -8,3 +8,5 @@ crates/iceberg/src/transaction/rewrite_data_files/tests/controlled.rs
 crates/iceberg/src/transaction/rewrite_data_files/group.rs
 crates/iceberg/src/transaction/rewrite_data_files/tests/partitions.rs
 crates/iceberg/src/io/artifacts.rs
+crates/iceberg/src/io/cancellation.rs
+crates/iceberg/src/transaction/rewrite_data_files/tests/cancellation.rs

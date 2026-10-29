@@ -428,7 +428,10 @@ pub(crate) async fn write_snapshot_commit(
             ref_name: MAIN_BRANCH.to_string(),
             reference: SnapshotReference::new(
                 snapshot_id,
-                SnapshotRetention::branch(None, None, None),
+                metadata.refs.get(MAIN_BRANCH).map_or_else(
+                    || SnapshotRetention::branch(None, None, None),
+                    |reference| reference.retention.clone(),
+                ),
             ),
         },
     ]);

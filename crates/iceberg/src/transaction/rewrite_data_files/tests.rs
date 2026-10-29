@@ -460,3 +460,5 @@ async fn compaction_reuses_output_files_across_publication_attempts() -> Result<
 mod controlled;
 
 mod partitions;
+
+mod cancellation;

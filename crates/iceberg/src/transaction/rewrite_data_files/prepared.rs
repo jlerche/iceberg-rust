@@ -82,8 +82,18 @@ impl PreparedRewriteDataFiles {
         self.base.metadata().current_snapshot_id()
     }
 
+    /// Checks cancellation and transfers the commit to a caller-controlled coordinator.
+    ///
+    /// # Errors
+    /// Returns `Cancelled` before handoff if the token has been cancelled.
+    pub fn try_into_table_commit(self) -> Result<TableCommit> {
+        self.base.file_io().check_cancellation()?;
+        Ok(self.into_table_commit())
+    }
+
     /// Transfers the standard commit to the caller's catalog or atomic coordinator.
     #[must_use]
+    /// This unchecked handoff delegates cancellation checks to the caller.
     pub fn into_table_commit(self) -> TableCommit {
         self.artifacts().protect();
         self.commit
@@ -95,8 +105,11 @@ impl PreparedRewriteDataFiles {
     /// Returns a stale-base or catalog error. A catalog error after submission
     /// may have an unknown outcome; no staged artifacts are deleted.
     pub async fn publish(self, catalog: &dyn Catalog) -> Result<Table> {
+        self.base.file_io().check_cancellation()?;
         let fresh = catalog.load_table(self.base.identifier()).await?;
+        self.base.file_io().check_cancellation()?;
         validate_base(&self.base, &fresh)?;
+        self.base.file_io().check_cancellation()?;
         self.artifacts().protect();
         catalog.update_table(self.commit).await
     }

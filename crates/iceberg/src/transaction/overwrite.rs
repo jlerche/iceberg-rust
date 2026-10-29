@@ -188,8 +188,10 @@ impl TransactionAction for OverwriteFilesAction {
     }
 
     async fn commit(&self, state: &mut Self::State, table: &Table) -> Result<ActionCommit> {
+        table.file_io().check_cancellation()?;
         self.validate(table)?;
         validate_files_not_live(table, &self.added).await?;
+        table.file_io().check_cancellation()?;
         let requested: HashMap<_, _> = self.removed.iter().map(|f| (f.file_path(), f)).collect();
         let mut found = HashSet::new();
         let mut unchanged = vec![];
@@ -197,6 +199,7 @@ impl TransactionAction for OverwriteFilesAction {
         // Resolve and validate every source before writing metadata. Entries from
         // the cache have inherited snapshot/data/file sequence numbers resolved.
         for descriptor in current_manifests(table).await? {
+            table.file_io().check_cancellation()?;
             let manifest = table.object_cache().get_manifest(&descriptor).await?;
             if descriptor.content == ManifestContentType::Deletes {
                 if manifest.entries().iter().any(|e| e.is_alive()) {
@@ -257,7 +260,9 @@ impl TransactionAction for OverwriteFilesAction {
                     writer.add_existing_entry(entry)?;
                 }
             }
+            table.file_io().check_cancellation()?;
             manifests.push(writer.write_manifest_file().await?);
+            table.file_io().check_cancellation()?;
         }
         let mut groups: BTreeMap<i32, Vec<&DataFile>> = BTreeMap::new();
         for file in &self.added {
@@ -288,7 +293,9 @@ impl TransactionAction for OverwriteFilesAction {
                         .build(),
                 )?;
             }
+            table.file_io().check_cancellation()?;
             manifests.push(writer.write_manifest_file().await?);
+            table.file_io().check_cancellation()?;
         }
         let path = manifest_list_path(table, snapshot_id, state.attempt, state.commit_uuid)?;
         state.attempt += 1;

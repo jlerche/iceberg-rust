@@ -250,11 +250,15 @@ impl Transaction {
 
         let mut current_table = self.table.clone();
         let mut artifact_inventories = vec![];
+        let mut cancellations = vec![];
         let mut existing_updates: Vec<TableUpdate> = vec![];
         let mut existing_requirements: Vec<TableRequirement> = vec![];
 
         for entry in self.actions.iter_mut() {
             let mut action_commit = entry.commit(&current_table).await?;
+            if let Some(token) = action_commit.take_cancellation() {
+                cancellations.push(token);
+            }
             if let Some(inventory) = action_commit.take_artifacts() {
                 artifact_inventories.push(inventory);
             }
@@ -273,10 +277,20 @@ impl Transaction {
             .requirements(existing_requirements)
             .build();
 
+        let single_submission = !artifact_inventories.is_empty() || !cancellations.is_empty();
+        for token in cancellations {
+            token.check()?;
+        }
         for inventory in artifact_inventories {
             inventory.protect();
         }
-        catalog.update_table(table_commit).await
+        catalog.update_table(table_commit).await.map_err(|error| {
+            if single_submission {
+                error.with_retryable(false)
+            } else {
+                error
+            }
+        })
     }
 }
 

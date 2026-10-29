@@ -63,3 +63,6 @@ pub(crate) fn is_truthy(value: &str) -> bool {
 
 mod artifacts;
 pub use artifacts::ArtifactInventory;
+
+mod cancellation;
+pub use cancellation::CancellationToken;

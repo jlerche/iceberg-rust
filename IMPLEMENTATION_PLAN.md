@@ -1989,3 +1989,69 @@ fork-owned file-length checks passed. API generation and `make check-public-api`
 handle and plan/result/prepared inventory accessors. External-store failure
 injection, durable recovery, explicit completion states, and automatic cleanup
 remain outside this slice.
+
+## Cooperative cancellation and independent review (2026-10-29)
+
+Attach a shared `io::CancellationToken` with
+`RewriteDataFilesAction::with_cancellation(token.clone())` before planning.
+Calling `token.cancel()` requests cancellation across planning, execution,
+preparation, and publication. Cancellation returns `ErrorKind::Cancelled` at
+cooperative checkpoints; it does not interrupt a pending I/O operation.
+
+Checkpoints run between groups, before and after batch reads/writes, around
+metadata writes, and immediately before a catalog submission. Results propagate
+the same token into preparation and transaction actions, including no-op
+rewrites. Retain the shared artifact inventory before execution to inspect
+partial outputs after cancellation; cancellation never deletes files.
+
+`PreparedRewriteDataFiles::try_into_table_commit()` checks cancellation before
+handing a standard commit to a caller. The existing unchecked
+`into_table_commit()` delegates subsequent cancellation checks to that caller.
+Generic `publish()` checks cancellation before loading the base, after that
+load, and before submission. Once submitted it returns the catalog's outcome,
+including success or an uncertain error, without replacing it with cancellation.
+
+Tracked/cancellation-aware transaction submissions are single-shot: a submitted
+catalog error is returned without automatic retry, preserving its original kind
+and protecting artifacts. Pre-submission cancellation never advances the
+catalog. Legacy transaction actions without tracking or cancellation retain
+the existing retry behavior. No-op rewrites still carry their token into final
+transaction checks so later actions cannot bypass cancellation.
+
+Two independent sub-agent reviews covered the accumulated fork and the new
+cancellation diff. Review findings were resolved and re-reviewed:
+
+- The upstream shared snapshot producer reset main-reference retention. It now
+  preserves existing retention when advancing main; a regression exercises
+  compaction followed by append.
+- No-op results dropped cancellation before final transaction checks. They now
+  retain the token; empty/single-file cases with a later cancelling action pass.
+- Retrying a lost success response could overwrite an unknown outcome with
+  `Cancelled`. Tracked/cancellation-aware submissions now preserve the original
+  error without retrying; deterministic lost-response tests cover both paths.
+- Batch processing now checks cancellation before starting the next awaited
+  read and immediately after writes.
+
+Independent reviewers reported no remaining actionable findings after fixes.
+`AGENTS.md` requires independent sub-agent review before every future commit and
+re-review of substantive fixes. Deterministic tests use allocation hooks and
+catalog callbacks rather than sleeps. This remains crate-only functionality;
+automatic cleanup, interruptible I/O, and automatic unknown-outcome recovery
+are not introduced.
+
+Cancellation validation used parent `8c22ee2e1`, toolchain
+`nightly-2026-04-16`, and unchanged Cargo.lock blob
+`dcd6452de71a284c3b57ee0c90204c3efacad743`:
+
+- `cargo test --locked -p iceberg --lib --quiet`: 2,130 passed, one ignored.
+  Eleven new tests cover cancellation stages, no-op composition, handoff,
+  post-submission success/lost response, and main-retention preservation.
+- `cargo test --locked -p iceberg --doc --quiet`: 89 passed, 14 ignored.
+- Default Clippy and `make check-fork-lints`: passed, including formatting,
+  ten checker self-tests, and all twelve registered fork-owned files below
+  1,000 physical lines.
+- Public API generation and `make check-public-api` passed; growth is limited to `CancellationToken`,
+  `ErrorKind::Cancelled`, the action builder setter, and checked commit handoff.
+- Independent reviewers confirmed the fixes; one independently ran all eleven
+  cancellation tests and the other independently ran the retention regression.
+- Full workspace, external reader, and REST/RustFS milestone gates remain pending.

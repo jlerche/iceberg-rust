@@ -63,6 +63,7 @@ impl RewriteDataFilesGroup {
         table: &Table,
         tasks: FileScanTaskStream,
     ) -> Result<Vec<DataFile>> {
+        table.file_io().check_cancellation()?;
         let expected_rows = row_count(&self.files)?;
         let mut batches = table
             .reader_builder()
@@ -77,7 +78,12 @@ impl RewriteDataFilesGroup {
         )
         .await?;
         let mut rows = 0_u64;
-        while let Some(batch) = batches.try_next().await? {
+        loop {
+            table.file_io().check_cancellation()?;
+            let Some(batch) = batches.try_next().await? else {
+                break;
+            };
+            table.file_io().check_cancellation()?;
             rows = rows
                 .checked_add(u64::try_from(batch.num_rows())?)
                 .ok_or_else(|| {
@@ -85,9 +91,12 @@ impl RewriteDataFilesGroup {
                 })?;
             if batch.num_rows() > 0 {
                 writer.write(batch).await?;
+                table.file_io().check_cancellation()?;
             }
         }
+        table.file_io().check_cancellation()?;
         let outputs = writer.close().await?;
+        table.file_io().check_cancellation()?;
         if rows != expected_rows || row_count(&outputs)? != expected_rows {
             return Err(Error::new(
                 ErrorKind::DataInvalid,

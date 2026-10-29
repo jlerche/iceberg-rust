@@ -77,7 +77,9 @@ use crate::{Error, ErrorKind, Result};
 ///     let result = plan.execute().await?;
 ///     let fresh = catalog.load_table(table.identifier()).await?;
 ///     if let Some(prepared) = result.prepare(&fresh).await? {
-///         catalog.update_table(prepared.into_table_commit()).await?;
+///         catalog
+///             .update_table(prepared.try_into_table_commit()?)
+///             .await?;
 ///     }
 ///     Ok(())
 /// }
@@ -94,6 +96,13 @@ impl RewriteDataFilesAction {
             base: table.clone(),
             selected: None,
         }
+    }
+
+    /// Attaches a cooperative cancellation signal to all rewrite stages.
+    #[must_use]
+    pub fn with_cancellation(mut self, token: crate::io::CancellationToken) -> Self {
+        self.base = self.base.with_cancellation(token);
+        self
     }
 
     /// Restricts compaction to exact live data-file descriptors.
@@ -133,6 +142,7 @@ impl RewriteDataFilesAction {
     }
 
     async fn inputs(&self, table: &Table) -> Result<(Vec<DataFile>, HashMap<String, i64>)> {
+        self.base.file_io().check_cancellation()?;
         validate_base(&self.base, table)?;
         if self.base.metadata().format_version() != FormatVersion::V2 {
             return Err(Error::new(
@@ -144,6 +154,7 @@ impl RewriteDataFilesAction {
         let mut sequence_numbers = HashMap::new();
         let mut paths = HashSet::new();
         for descriptor in current_manifests(table).await? {
+            self.base.file_io().check_cancellation()?;
             let manifest = table.object_cache().get_manifest(&descriptor).await?;
             for entry in manifest.entries().iter().filter(|entry| entry.is_alive()) {
                 if descriptor.content != ManifestContentType::Data {
@@ -198,6 +209,7 @@ impl TransactionAction for RewriteDataFilesAction {
     }
 
     async fn commit(&self, state: &mut Self::State, table: &Table) -> Result<ActionCommit> {
+        self.base.file_io().check_cancellation()?;
         validate_base(&self.base, table)?;
         if state.prepared.is_none() {
             let result = self.plan().await?.execute().await?;

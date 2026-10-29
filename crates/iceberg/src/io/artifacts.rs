@@ -52,6 +52,8 @@ use std::sync::{Arc, Mutex, PoisonError};
 pub struct ArtifactInventory {
     paths: Arc<Mutex<BTreeSet<String>>>,
     protected: Arc<AtomicBool>,
+    #[cfg(test)]
+    cancel_on_registration: Arc<Mutex<Option<super::CancellationToken>>>,
 }
 
 impl ArtifactInventory {
@@ -72,11 +74,29 @@ impl ArtifactInventory {
         self.protected.load(Ordering::SeqCst)
     }
 
+    #[cfg(test)]
+    pub(crate) fn cancel_on_registration(&self, token: super::CancellationToken) {
+        *self
+            .cancel_on_registration
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some(token);
+    }
+
     pub(super) fn register(&self, path: &str) {
         self.paths
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .insert(path.to_string());
+        #[cfg(test)]
+        let token = self
+            .cancel_on_registration
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take();
+        #[cfg(test)]
+        if let Some(token) = token {
+            token.cancel();
+        }
     }
 
     pub(crate) fn protect(&self) {

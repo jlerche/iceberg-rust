@@ -29,6 +29,8 @@ pub type Result<T> = std::result::Result<T, Error>;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ErrorKind {
+    /// The operation stopped at a cooperative cancellation boundary.
+    Cancelled,
     /// The operation was rejected because the system is not in a state required for the operation’s execution.
     PreconditionFailed,
 
@@ -76,6 +78,7 @@ impl ErrorKind {
 impl From<ErrorKind> for &'static str {
     fn from(v: ErrorKind) -> &'static str {
         match v {
+            ErrorKind::Cancelled => "Cancelled",
             ErrorKind::Unexpected => "Unexpected",
             ErrorKind::DataInvalid => "DataInvalid",
             ErrorKind::FeatureUnsupported => "FeatureUnsupported",

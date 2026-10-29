@@ -107,10 +107,12 @@ impl RewriteDataFilesPlan {
     /// Returns scan, writer, or record-count validation errors. Partial output
     /// files are retained after errors or cancellation; callers own cleanup.
     pub async fn execute(self) -> Result<RewriteDataFilesResult> {
+        self.base.file_io().check_cancellation()?;
         let mut inputs = vec![];
         let mut outputs = vec![];
         let mut sequences = HashMap::new();
         for group in &self.groups {
+            self.base.file_io().check_cancellation()?;
             if group.files.len() < 2 {
                 continue;
             }
@@ -124,6 +126,7 @@ impl RewriteDataFilesPlan {
             outputs.extend(files);
             inputs.extend(group.files.iter().cloned());
         }
+        self.base.file_io().check_cancellation()?;
         Ok(RewriteDataFilesResult::new(
             self.base, inputs, outputs, sequences,
         ))

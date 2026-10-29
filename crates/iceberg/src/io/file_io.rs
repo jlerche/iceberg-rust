@@ -68,6 +68,7 @@ pub struct FileIO {
     /// Cached storage instance (lazily initialized)
     storage: Arc<OnceLock<Arc<dyn Storage>>>,
     inventory: Option<super::ArtifactInventory>,
+    cancellation: Option<super::CancellationToken>,
 }
 
 mod _serde {
@@ -100,6 +101,7 @@ impl FileIO {
             factory: Arc::new(MemoryStorageFactory),
             storage: Arc::new(OnceLock::new()),
             inventory: None,
+            cancellation: None,
         }
     }
 
@@ -112,6 +114,7 @@ impl FileIO {
             factory: Arc::new(LocalFsStorageFactory),
             storage: Arc::new(OnceLock::new()),
             inventory: None,
+            cancellation: None,
         }
     }
 
@@ -149,7 +152,24 @@ impl FileIO {
             factory,
             storage: Arc::new(OnceLock::new()),
             inventory: None,
+            cancellation: None,
         })
+    }
+
+    pub(crate) fn with_cancellation(mut self, token: super::CancellationToken) -> Self {
+        self.cancellation = Some(token);
+        self
+    }
+
+    pub(crate) fn cancellation(&self) -> Option<super::CancellationToken> {
+        self.cancellation.clone()
+    }
+
+    pub(crate) fn check_cancellation(&self) -> Result<()> {
+        if let Some(token) = &self.cancellation {
+            token.check()?;
+        }
+        Ok(())
     }
 
     pub(crate) fn track_outputs(mut self, inventory: super::ArtifactInventory) -> Self {
@@ -246,6 +266,7 @@ impl FileIO {
     ///
     /// * path: It should be *absolute* path starting with scheme string used to construct [`FileIO`].
     pub fn new_output(&self, path: impl AsRef<str>) -> Result<OutputFile> {
+        self.check_cancellation()?;
         if let Some(inventory) = &self.inventory {
             inventory.register(path.as_ref());
         }
@@ -303,6 +324,7 @@ impl FileIOBuilder {
             factory: self.factory,
             storage: Arc::new(OnceLock::new()),
             inventory: None,
+            cancellation: None,
         }
     }
 }
