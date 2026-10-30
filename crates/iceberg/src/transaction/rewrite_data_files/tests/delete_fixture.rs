@@ -105,6 +105,14 @@ pub(super) async fn equality_rows(
 pub(super) async fn positions(table: &Table, positions: &[(String, i64)]) -> Result<Vec<DataFile>> {
     let mut positions = positions.to_vec();
     positions.sort();
+    positions_ordered(table, &positions, None).await
+}
+
+pub(super) async fn positions_ordered(
+    table: &Table,
+    positions: &[(String, i64)],
+    partition: Option<PartitionKey>,
+) -> Result<Vec<DataFile>> {
     let schema = position_delete_schema();
     let batch = RecordBatch::try_new(Arc::new(ArrowSchema::try_from(schema.as_ref())?), vec![
         Arc::new(
@@ -121,7 +129,7 @@ pub(super) async fn positions(table: &Table, positions: &[(String, i64)]) -> Res
         ),
     ])?;
     let mut writer = PositionDeleteFileWriterBuilder::new(rolling(table, schema)?)
-        .build(None)
+        .build(partition)
         .await?;
     writer.write(batch).await?;
     writer.close().await
@@ -226,4 +234,18 @@ pub(super) async fn replace_inventory(
     })
     .await?;
     crate::transaction::Transaction::update_table_metadata(table.clone(), &action.take_updates())
+}
+
+pub(super) async fn position_batch(table: &Table, batch: RecordBatch) -> Result<Vec<DataFile>> {
+    use crate::writer::base_writer::data_file_writer::DataFileWriterBuilder;
+    let schema = Arc::new(arrow_schema_to_schema(batch.schema().as_ref())?);
+    let mut writer = DataFileWriterBuilder::new(rolling(table, schema)?)
+        .build(None)
+        .await?;
+    writer.write(batch).await?;
+    let mut files = writer.close().await?;
+    for file in &mut files {
+        file.content = crate::spec::DataContentType::PositionDeletes;
+    }
+    Ok(files)
 }

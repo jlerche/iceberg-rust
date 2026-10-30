@@ -153,7 +153,7 @@ impl Transaction {
         RewriteDataFilesAction::new(&self.table)
     }
 
-    /// Adds caller-written data and equality-delete files atomically.
+    /// Adds caller-written data and row-delete files atomically.
     pub fn row_delta(&self) -> RowDeltaAction {
         RowDeltaAction::new(&self.table)
     }

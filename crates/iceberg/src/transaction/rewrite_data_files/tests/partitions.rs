@@ -682,3 +682,92 @@ async fn row_delta_rejects_nonprimitive_partition_literals_without_panicking() -
     }
     Ok(())
 }
+
+#[tokio::test]
+async fn position_delta_validates_target_partition_and_preserves_other_partitions() -> Result<()> {
+    use super::delete_fixture::positions_ordered;
+    let mut fixture = fixture().await?;
+    append(&mut fixture, Some(1), &[
+        row(Some(1), Some("first")),
+        row(Some(1), Some("second")),
+    ])
+    .await?;
+    append(&mut fixture, Some(2), &[row(Some(2), Some("untouched"))]).await?;
+    let file = live_entries(&fixture.table)
+        .await?
+        .into_iter()
+        .find(|entry| entry.data_file().partition() == &partition(Some(1)))
+        .ok_or_else(missing)?
+        .data_file()
+        .clone();
+    let key = PartitionKey::new(
+        fixture
+            .table
+            .metadata()
+            .default_partition_spec()
+            .as_ref()
+            .clone(),
+        fixture.table.metadata().current_schema().clone(),
+        partition(Some(1)),
+    );
+    let deletes = positions_ordered(
+        &fixture.table,
+        &[(file.file_path().to_string(), 0)],
+        Some(key),
+    )
+    .await?;
+    let mut wrong = deletes.clone();
+    wrong.first_mut().ok_or_else(missing)?.partition = partition(Some(2));
+    let action = Transaction::new(&fixture.table)
+        .row_delta()
+        .add_delete_files(wrong);
+    let error = action
+        .prepare(&fixture.table)
+        .await
+        .err()
+        .ok_or_else(missing)?;
+    assert_eq!(
+        (error.kind(), action.artifacts().paths()),
+        (ErrorKind::DataInvalid, vec![])
+    );
+    let tx = Transaction::new(&fixture.table);
+    let fresh = tx
+        .row_delta()
+        .add_delete_files(deletes)
+        .apply(tx)?
+        .commit(&fixture.catalog)
+        .await?;
+    assert_eq!(read_rows(&fresh, None).await?, vec![
+        row(Some(1), Some("second")),
+        row(Some(2), Some("untouched"))
+    ]);
+    Ok(())
+}
+
+#[tokio::test]
+async fn position_delta_cross_spec_targets_are_rejected_before_metadata_allocation() -> Result<()> {
+    use super::delete_fixture::positions;
+    let mut fixture = Fixture::new().await?;
+    fixture.append(&[row(Some(1), None)]).await?;
+    evolve(&mut fixture).await?;
+    append(&mut fixture, Some(1), &[row(Some(1), Some("new-spec"))]).await?;
+    let file = live_entries(&fixture.table)
+        .await?
+        .into_iter()
+        .find(|entry| entry.data_file().partition_spec_id == 1)
+        .ok_or_else(missing)?;
+    let deletes = positions(&fixture.table, &[(file.file_path().to_string(), 0)]).await?;
+    let action = Transaction::new(&fixture.table)
+        .row_delta()
+        .add_delete_files(deletes);
+    let error = action
+        .prepare(&fixture.table)
+        .await
+        .err()
+        .ok_or_else(missing)?;
+    assert_eq!(
+        (error.kind(), action.artifacts().paths()),
+        (ErrorKind::FeatureUnsupported, vec![])
+    );
+    Ok(())
+}

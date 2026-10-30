@@ -265,7 +265,7 @@ async fn row_delta_rejects_invalid_descriptors_ids_content_and_formats_before_wr
     rejected(
         &action.add_delete_files(positional),
         &fixture.table,
-        ErrorKind::FeatureUnsupported,
+        ErrorKind::DataInvalid,
     )
     .await
 }

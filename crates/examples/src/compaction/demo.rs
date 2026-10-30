@@ -21,7 +21,7 @@ use std::sync::Arc;
 
 use arrow_array::cast::AsArray;
 use arrow_array::types::Int32Type;
-use arrow_array::{Array, Int32Array, RecordBatch};
+use arrow_array::{Array, Int32Array, Int64Array, RecordBatch, StringArray};
 use arrow_schema::Schema as ArrowSchema;
 use futures::TryStreamExt;
 use iceberg::io::LocalFsStorageFactory;
@@ -146,6 +146,40 @@ impl Demo {
             writer.write(batch).await?;
             writer.close().await
         }
+    }
+    pub async fn position_deletes(table: &Table, pairs: &[(String, i64)]) -> Result<Vec<DataFile>> {
+        use iceberg::writer::base_writer::position_delete_writer::{
+            PositionDeleteFileWriterBuilder, position_delete_schema,
+        };
+        let schema = position_delete_schema();
+        let batch = RecordBatch::try_new(Arc::new(ArrowSchema::try_from(schema.as_ref())?), vec![
+            Arc::new(
+                pairs
+                    .iter()
+                    .map(|(path, _)| Some(path.as_str()))
+                    .collect::<StringArray>(),
+            ),
+            Arc::new(pairs.iter().map(|(_, pos)| *pos).collect::<Int64Array>()),
+        ])?;
+        let parquet = ParquetWriterBuilder::from_table_properties(
+            &table.metadata().table_properties(),
+            schema,
+        )?;
+        let rolling = RollingFileWriterBuilder::new_with_default_file_size(
+            parquet,
+            table.file_io().clone(),
+            DefaultLocationGenerator::new(table.metadata())?,
+            DefaultFileNameGenerator::new(
+                format!("demo-pos-{}", uuid::Uuid::new_v4()),
+                None,
+                DataFileFormat::Parquet,
+            ),
+        );
+        let mut writer = PositionDeleteFileWriterBuilder::new(rolling)
+            .build(None)
+            .await?;
+        writer.write(batch).await?;
+        writer.close().await
     }
 }
 

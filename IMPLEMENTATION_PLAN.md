@@ -205,7 +205,7 @@ External Postgres coordination stays with the downstream adapter.
 External-reader validation and broader maintenance features remain follow-ups,
 not prerequisites for trying the supported path in `icestream`. Total-plan
 admission limits for selected file count and source bytes are implemented.
-Atomic data/equality-delete publication is available through `RowDelta`, with
+Atomic data/equality/validated-position publication is available through `RowDelta`, with
 standard prepared-commit handoff for downstream catalog coordination.
 Explicit-selection planning also retains only selected descriptor/sequence
 inventories, while preserving whole-table validation.
@@ -1419,11 +1419,12 @@ The work below describes the broader milestone, not a completed exit gate.
 
 ### Milestone J: `RowDelta`
 
-Delivered initial slice: v2/main Parquet data plus equality-delete
-publication against an unchanged base, standard prepared-commit handoff,
-transaction convenience, cancellation, and one-shot submission. Position-delete
-publication, broader isolation/rebase policies, and external-reader gates remain
-outside this first slice.
+Delivered core slices: v2/main Parquet data plus equality and canonical
+position-delete publication against an unchanged base, prepared commit handoff,
+transaction convenience, cancellation, and one-shot submission. Position
+publication validates payloads and raw target footers with matching spec/partition.
+Broader position formats/targets, isolation/rebase policies, and external-reader
+gates remain open.
 
 #### Work
 
@@ -2409,3 +2410,53 @@ Validation from parent `1ea96142a`, pinned toolchain, and unchanged Cargo.lock:
 
 Position-delete publication and external-reader/REST row-delta cases remain open.
 This does not complete the full Milestone J exit gate.
+
+
+## Validated position-delete row deltas (2026-10-29)
+
+`RowDelta` now publishes v2 Parquet position deletes, including deletes of same-commit new data. Strict-base preparation,
+standard commit handoff, one-shot publication, and file retention remain unchanged.
+Position files are fully streamed in 1,024-row batches before new metadata is
+allocated. Validation checks canonical required path/position columns in both
+physical Parquet and Arrow schemas, nonnull paths, nonnegative positions, strict
+ordering across batches, optional referenced-file metadata, and descriptor sizes
+and row counts against actual object metadata and footers.
+
+Each target must be live data or newly added data in the same delta, with matching
+partition spec/value. Target footers are checked once per path for physical row
+bounds, avoiding filtered-row offsets and untrusted descriptor counts. Compacted
+historical paths are rejected even while old objects remain readable. Positional
+same-commit applicability is inclusive, unlike equality deletes; tests must
+verify new rows can be explicitly position-deleted in their publication commit.
+
+This slice requires strictly increasing unique pairs within each delete file;
+overlap across different delete files is allowed. Optional row payload columns,
+Puffin/v3, and cross-spec position targets remain gated. Caller-provided metrics
+remain an accuracy contract; descriptor bounds and payload equivalence are not
+comprehensively rederived. Position payload and target-footer I/O are additional
+preparation costs.
+
+Validation from parent `fe229d6ee`, pinned toolchain, and unchanged Cargo.lock:
+
+- Core library: 2,183 passed, one ignored. Thirteen new real-Parquet/catalog tests
+  cover raw indexing with pre-existing equality deletes, same-commit data targets,
+  shared targets, overlap across separate delete files, invalid paths/positions,
+  ordering across batches, physical schema IDs/nullability and embedded Arrow
+  coercion, reference metadata, object sizes/counts, actual target footer bounds,
+  unreadable inputs, partition scope, cross-spec rejection, and conflicts or
+  historical targets after compaction.
+- Documentation: 90 passed, 14 ignored. The runnable example now includes a fifth
+  scenario publishing position deletes, checking history, and compacting while
+  preserving surviving duplicate rows.
+- Independent reviewers found no remaining correctness issues. Both ran the
+  initial twelve position regressions; one re-reviewed the physical String
+  annotation guard and independently passed all thirteen final regressions.
+
+Default Clippy and `make check-fork-lints` passed, including formatting, ten
+checker self-tests, and the 1,000-line gate for all thirty-four registered
+fork-owned files. API generation and `make check-public-api` passed with no
+public API snapshot changes. All five runnable scenarios passed.
+
+Optional row payloads, cross-spec
+position targets, v3/Puffin, external-reader/REST position cases, and automatic
+delete retirement remain open.

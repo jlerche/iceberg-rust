@@ -38,6 +38,8 @@
     clippy::wildcard_imports
 )]
 
+mod position_schema;
+mod positions;
 mod prepared;
 mod validation;
 
@@ -58,7 +60,7 @@ use crate::spec::{DataContentType, DataFile, ManifestContentType, Operation};
 use crate::table::Table;
 use crate::{Result, TableRequirement};
 
-/// Publishes immutable caller-written data and equality deletes in one snapshot.
+/// Publishes immutable caller-written data and row deletes in one snapshot.
 ///
 /// Supports main on v2 tables with Parquet files. The planning base must remain
 /// unchanged, including on transaction retry; concurrent appends or mutations
@@ -66,8 +68,13 @@ use crate::{Result, TableRequirement};
 /// isolation policy. Use one snapshot-producing action per transaction.
 /// Added rows and deletes inherit the same new data sequence,
 /// so equality deletes affect older rows and preserve same-commit replacements.
+/// Position deletes can explicitly target rows added in the same commit.
 /// Callers must finish immutable file writes and supply accurate descriptors;
-/// this action validates metadata, not Parquet payloads. Files are never deleted.
+/// data/equality payloads are not reread. Position deletes are streamed and checked
+/// against raw target-file Parquet row counts before metadata allocation. The
+/// initial position mode requires two canonical columns, strictly ordered unique
+/// `(path, position)` pairs, and matching target spec/partition. Targets may be
+/// live data files or new data files in this delta. Files are never deleted.
 ///
 /// ```no_run
 /// use iceberg::spec::DataFile;
@@ -115,7 +122,7 @@ impl RowDeltaAction {
         self
     }
 
-    /// Supplies newly written equality-delete files.
+    /// Supplies newly written equality or position-delete files.
     #[must_use]
     pub fn add_delete_files(mut self, files: impl IntoIterator<Item = DataFile>) -> Self {
         self.deletes.extend(files);
@@ -142,7 +149,8 @@ impl RowDeltaAction {
     ///
     /// # Errors
     /// Rejects a changed base, empty delta, invalid descriptors, unsupported
-    /// formats, live path collisions, cancellation, or metadata-writing errors.
+    /// formats, live path collisions, cancellation, input-reading errors, or
+    /// metadata-writing errors.
     pub async fn prepare(&self, table: &Table) -> Result<PreparedRowDelta> {
         let table = self.tracked(table);
         let commit = self.build_commit(&table).await?;
@@ -167,6 +175,7 @@ impl RowDeltaAction {
             .cloned()
             .collect::<Vec<_>>();
         validate_files_not_live(table, &files).await?;
+        positions::validate(table, &self.data, &self.deletes).await?;
         table.file_io().check_cancellation()?;
         let id = generate_snapshot_id(table);
         let uuid = Uuid::now_v7();

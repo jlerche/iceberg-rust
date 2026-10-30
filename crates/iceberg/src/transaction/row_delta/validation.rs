@@ -59,18 +59,19 @@ pub(super) fn validate(
 }
 
 fn validate_file(table: &Table, file: &DataFile, expected: DataContentType) -> Result<()> {
-    if file.content_type() == DataContentType::PositionDeletes
-        || file.file_format() != DataFileFormat::Parquet
-    {
+    if file.file_format() != DataFileFormat::Parquet {
         return Err(Error::new(
             ErrorKind::FeatureUnsupported,
-            "Row delta supports only Parquet data and equality deletes",
+            "Row delta supports only Parquet files",
         ));
     }
-    if file.content_type() != expected
+    let position = file.content_type() == DataContentType::PositionDeletes;
+    if (file.content_type() != expected
+        && !(expected == DataContentType::EqualityDeletes && position))
         || file.file_path().is_empty()
         || file.file_size_in_bytes() == 0
-        || file.referenced_data_file.is_some()
+        || (!position && file.referenced_data_file.is_some())
+        || (position && file.sort_order_id.is_some())
         || file.content_offset.is_some()
         || file.content_size_in_bytes.is_some()
     {
@@ -86,7 +87,7 @@ fn validate_file(table: &Table, file: &DataFile, expected: DataContentType) -> R
         file.partition(),
         &spec.partition_type(table.metadata().current_schema())?,
     )?;
-    if expected == DataContentType::EqualityDeletes {
+    if file.content_type() == DataContentType::EqualityDeletes {
         EqualityDeleteWriterConfig::new(
             file.equality_ids.clone().ok_or_else(invalid)?,
             table.metadata().current_schema().clone(),

@@ -31,7 +31,7 @@ cargo run --locked -p iceberg-examples --example caller-controlled-compaction
 
 The executable checks exact rows, duplicate and null preservation, historical
 reads, and retained staged artifacts. It exits with an error or assertion failure
-if an expected outcome does not hold. Its four scenarios demonstrate:
+if an expected outcome does not hold. Its five scenarios demonstrate:
 
 1. Select two live file descriptors, execute without publishing, refresh the
    table, prepare snapshot metadata, and transfer the standard `TableCommit`
@@ -57,12 +57,23 @@ if an expected outcome does not hold. Its four scenarios demonstrate:
    the deleted old rows do not return. The caller chooses incoming rows and
    delete keys; the library does not deduplicate the incoming batch.
 
-The initial `RowDelta` supports v2/main Parquet data and equality deletes. It
-requires an unchanged planning base, rejects position-delete publication, and
+5. Publish a position delete for a known physical row index, preserving a
+   duplicate in another file. Verify historical rows, then compact without
+   resurrecting the removed row. The index is an offset into the original file,
+   independent of any earlier delete filtering.
+
+`RowDelta` supports v2/main Parquet data, equality deletes, and canonical
+position deletes. Preparation reads position payloads and referenced Parquet
+footers before allocating commit metadata; targets must be live or newly added,
+with matching spec/partition. Two required columns and strictly ordered unique
+pairs within each delete file are required. Optional row columns, cross-spec
+position targets, and deletion vectors remain gated. Descriptor metrics must
+still be accurate; only object size, row count, scope, and position payload
+invariants are checked against storage. It requires an unchanged planning base and
 never rebases or retries a submitted operation automatically. Its artifact
 inventory contains newly allocated metadata only: persist caller-written data
 and delete paths separately before handoff. Finish immutable writes and supply
-accurate descriptors; preparation does not inspect Parquet payload contents.
+accurate descriptors; data and equality payloads remain caller-validated.
 
 The example prints a receipt before handoff: table identity and UUID, validated
 publication-base metadata location and snapshot, prepared snapshot identity and

@@ -58,6 +58,7 @@ async fn main() -> Result<()> {
     definitive_conflict(&demo).await?;
     unknown_outcome(&demo).await?;
     keyed_row_delta(&demo).await?;
+    position_row_delta(&demo).await?;
     println!(
         "All scenarios passed. Demo files remain at {}",
         demo.warehouse.display()
@@ -259,6 +260,49 @@ async fn keyed_row_delta(demo: &Demo) -> Result<()> {
     ]);
     println!(
         "row delta: data and equality deletes committed atomically; compaction preserved replacement rows"
+    );
+    Ok(())
+}
+
+async fn position_row_delta(demo: &Demo) -> Result<()> {
+    let (base, selected) = demo.seed("position_delta").await?;
+    let target = selected.first().ok_or_else(missing)?;
+    let deletes = Demo::position_deletes(&base, &[(target.file_path().to_string(), 1)]).await?;
+    let prepared = Transaction::new(&base)
+        .row_delta()
+        .add_delete_files(deletes)
+        .prepare(&base)
+        .await?;
+    let fresh = prepared.publish(&demo.catalog).await?;
+    let expected = vec![None, Some(1), Some(2), Some(99)];
+    assert_eq!(
+        (
+            rows(&fresh, None).await?,
+            rows(&fresh, base.metadata().current_snapshot_id()).await?
+        ),
+        (expected.clone(), vec![
+            None,
+            Some(1),
+            Some(1),
+            Some(2),
+            Some(99)
+        ])
+    );
+    let result = Transaction::new(&fresh)
+        .rewrite_data_files()
+        .plan()
+        .await?
+        .execute()
+        .await?;
+    let compacted = result
+        .prepare(&fresh)
+        .await?
+        .ok_or_else(missing)?
+        .publish(&demo.catalog)
+        .await?;
+    assert_eq!(rows(&compacted, None).await?, expected);
+    println!(
+        "position delta: validated raw position published; history and surviving duplicate preserved after compaction"
     );
     Ok(())
 }

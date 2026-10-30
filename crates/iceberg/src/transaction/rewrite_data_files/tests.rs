@@ -473,3 +473,5 @@ mod delete_fixture;
 mod deletes;
 
 mod row_delta;
+
+mod position_delta;
