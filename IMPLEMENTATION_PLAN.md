@@ -210,6 +210,55 @@ standard prepared-commit handoff for downstream catalog coordination.
 Explicit-selection planning also retains only selected descriptor/sequence
 inventories, while preserving whole-table validation.
 
+### Stopping point: v2 icestream integration readiness
+
+Freeze feature scope at the current v2/main Parquet mutation path: caller-written
+data plus equality/canonical position deletes through `RowDelta`, caller-selected
+delete-aware compaction, standard prepared commit handoff, strict conflict
+validation, cancellation, and conservative unknown-outcome handling. This is an
+initial integration boundary, not completion of milestones A–M or a production
+operations certification.
+
+The remaining work is a finite validation closeout, in this order:
+
+- [ ] Exercise the public `RowDelta` and compaction APIs together against the
+  disposable REST/RustFS fixture. Cover equality replacements and tombstones,
+  canonical position deletes, same-commit sequence boundaries, retained history,
+  and compaction without resurrection. Include a definitive stale-commit
+  rejection and simulated lost success response for a row delta. Existing
+  no-delete REST coverage does not establish these live-delete cases.
+- [ ] Read the Rust-published v2 tables with one independent Iceberg reader,
+  using the existing Spark fixture where practical. Check exact visible rows
+  before and after compaction and retained historical snapshots for both delete
+  types. Keep this a focused interoperability smoke suite; do not add another
+  engine integration or a general benchmark framework.
+- [ ] Close any correctness failures, finalize the supported-contract/runbook
+  documentation, and record the final tested commit and service/tool versions.
+  Run affected core, catalog/storage integration, example, lint, and API checks
+  locally, with independent sub-agent review before every commit. Record unrun
+  broader gates explicitly. Do not repeat unchanged checks without a reason.
+
+Stop fork feature development when these checks pass and the closeout is
+reviewed. Pin that revision for the downstream integration trial. Only bugs that
+prevent this supported path belong in the closeout; a failed check does not
+silently expand the feature scope. Postgres catalog coordination, Kafka key
+selection/deduplication, offsets, and application recovery persistence remain in
+`icestream`, outside this repository.
+
+Deferred beyond this stopping point: automatic delete-file retirement, snapshot
+expiration plus physical cleanup, v3/Puffin, cross-spec position targets, optional
+position-row payloads, broader isolation/rebase modes, fully bounded metadata
+planning, distributed execution, and DataFusion/IVM work. Retained old data and
+delete files can accumulate; the integration trial must account for that storage
+cost without treating artifact inventories as deletion authorization. Safe
+reclamation is a separate operational milestone, not an implicit part of this
+closeout.
+
+Baseline at `08cc794a9`: 2,183 core tests and 90 doc tests passed, as did the
+five-scenario example, strict/default Clippy, file-length checks, API consistency,
+and independent review. Live-delete REST/RustFS and external-reader acceptance
+items above remain pending; this baseline does not claim them as passes.
+
 ### Caller-controlled compaction contract (2026-10-29)
 
 The primary flow is now:
