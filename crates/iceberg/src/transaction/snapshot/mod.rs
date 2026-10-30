@@ -141,12 +141,15 @@ pub(crate) fn validate_partition_value(
                 "Partition field should only be primitive type.",
             )
         })?;
-        if let Some(value) = value
-            && !field.compatible(&value.as_primitive_literal().unwrap())
-        {
-            return Err(invalid_data!(
-                "Partition value is not compatible partition type"
-            ));
+        if let Some(value) = value {
+            let primitive = value
+                .as_primitive_literal()
+                .ok_or_else(|| invalid_data!("Partition value must be a primitive literal"))?;
+            if !field.compatible(&primitive) {
+                return Err(invalid_data!(
+                    "Partition value is not compatible partition type"
+                ));
+            }
         }
     }
     Ok(())

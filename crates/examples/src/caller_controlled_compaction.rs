@@ -57,6 +57,7 @@ async fn main() -> Result<()> {
     successful_handoff(&demo).await?;
     definitive_conflict(&demo).await?;
     unknown_outcome(&demo).await?;
+    keyed_row_delta(&demo).await?;
     println!(
         "All scenarios passed. Demo files remain at {}",
         demo.warehouse.display()
@@ -197,6 +198,67 @@ async fn unknown_outcome(demo: &Demo) -> Result<()> {
     receipt.check_artifacts(&advanced).await?;
     println!(
         "recovered: exact prepared snapshot is on main's retained ancestry; no second rewrite submitted"
+    );
+    Ok(())
+}
+
+async fn keyed_row_delta(demo: &Demo) -> Result<()> {
+    let (base, _) = demo.seed("row_delta").await?;
+    let data = Demo::write(&base, &[Some(1), None], false).await?;
+    let deletes = Demo::write(&base, &[Some(1), None], true).await?;
+    let caller_paths = data
+        .iter()
+        .chain(&deletes)
+        .map(|file| file.file_path().to_string())
+        .collect::<Vec<_>>();
+    let action = Transaction::new(&base)
+        .row_delta()
+        .add_data_files(data)
+        .add_delete_files(deletes);
+    let prepared = action.prepare(&base).await?;
+    let snapshot_id = prepared.snapshot().snapshot_id();
+    println!(
+        "row-delta handoff: snapshot={snapshot_id}, base={:?}, metadata={:?}, caller-files={caller_paths:?}",
+        prepared.base_snapshot_id(),
+        prepared.base_metadata_location()
+    );
+    let metadata = prepared.artifacts();
+    let fresh = demo
+        .catalog
+        .update_table(prepared.try_into_table_commit()?)
+        .await?;
+    assert_eq!(
+        (
+            fresh.metadata().current_snapshot_id(),
+            rows(&fresh, None).await?,
+            metadata.publication_protected()
+        ),
+        (
+            Some(snapshot_id),
+            vec![None, Some(1), Some(2), Some(99)],
+            true
+        )
+    );
+    let result = Transaction::new(&fresh)
+        .rewrite_data_files()
+        .plan()
+        .await?
+        .execute()
+        .await?;
+    let compacted = result
+        .prepare(&fresh)
+        .await?
+        .ok_or_else(missing)?
+        .publish(&demo.catalog)
+        .await?;
+    assert_eq!(rows(&compacted, None).await?, vec![
+        None,
+        Some(1),
+        Some(2),
+        Some(99)
+    ]);
+    println!(
+        "row delta: data and equality deletes committed atomically; compaction preserved replacement rows"
     );
     Ok(())
 }

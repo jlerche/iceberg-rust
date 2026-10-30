@@ -74,12 +74,26 @@ pub(super) async fn equality(
     keys: &[Option<i32>],
     partition: Option<PartitionKey>,
 ) -> Result<Vec<DataFile>> {
+    let rows = keys.iter().map(|key| (*key, None)).collect::<Vec<_>>();
+    equality_rows(table, &rows, vec![1], partition).await
+}
+
+pub(super) async fn equality_rows(
+    table: &Table,
+    rows: &[super::Row],
+    ids: Vec<i32>,
+    partition: Option<PartitionKey>,
+) -> Result<Vec<DataFile>> {
     let schema = table.metadata().current_schema().clone();
-    let config = EqualityDeleteWriterConfig::new(vec![1], schema.clone())?;
+    let config = EqualityDeleteWriterConfig::new(ids, schema.clone())?;
     let delete_schema = Arc::new(arrow_schema_to_schema(config.projected_arrow_schema_ref())?);
     let batch = RecordBatch::try_new(Arc::new(ArrowSchema::try_from(schema.as_ref())?), vec![
-        Arc::new(keys.iter().copied().collect::<Int32Array>()),
-        Arc::new(keys.iter().map(|_| None::<&str>).collect::<StringArray>()),
+        Arc::new(rows.iter().map(|row| row.0).collect::<Int32Array>()),
+        Arc::new(
+            rows.iter()
+                .map(|row| row.1.as_deref())
+                .collect::<StringArray>(),
+        ),
     ])?;
     let mut writer = EqualityDeleteFileWriterBuilder::new(rolling(table, delete_schema)?, config)
         .build(partition)

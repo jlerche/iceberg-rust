@@ -3492,6 +3492,14 @@ pub fn iceberg::transaction::PreparedRewriteDataFiles::into_table_commit(self) -
 pub async fn iceberg::transaction::PreparedRewriteDataFiles::publish(self, catalog: &dyn iceberg::Catalog) -> iceberg::Result<iceberg::table::Table>
 pub const fn iceberg::transaction::PreparedRewriteDataFiles::snapshot(&self) -> &iceberg::spec::Snapshot
 pub fn iceberg::transaction::PreparedRewriteDataFiles::try_into_table_commit(self) -> iceberg::Result<iceberg::TableCommit>
+pub struct iceberg::transaction::PreparedRowDelta
+impl iceberg::transaction::PreparedRowDelta
+pub fn iceberg::transaction::PreparedRowDelta::artifacts(&self) -> iceberg::io::ArtifactInventory
+pub fn iceberg::transaction::PreparedRowDelta::base_metadata_location(&self) -> core::option::Option<&str>
+pub fn iceberg::transaction::PreparedRowDelta::base_snapshot_id(&self) -> core::option::Option<i64>
+pub async fn iceberg::transaction::PreparedRowDelta::publish(self, catalog: &dyn iceberg::Catalog) -> iceberg::Result<iceberg::table::Table>
+pub const fn iceberg::transaction::PreparedRowDelta::snapshot(&self) -> &iceberg::spec::Snapshot
+pub fn iceberg::transaction::PreparedRowDelta::try_into_table_commit(self) -> iceberg::Result<iceberg::TableCommit>
 pub struct iceberg::transaction::ReplaceSortOrderAction
 impl iceberg::transaction::ReplaceSortOrderAction
 pub fn iceberg::transaction::ReplaceSortOrderAction::asc(self, name: &str, null_order: iceberg::spec::NullOrder) -> Self
@@ -3531,6 +3539,15 @@ pub fn iceberg::transaction::RewriteDataFilesResult::output_files(&self) -> &[ic
 pub async fn iceberg::transaction::RewriteDataFilesResult::prepare(&self, table: &iceberg::table::Table) -> iceberg::Result<core::option::Option<iceberg::transaction::PreparedRewriteDataFiles>>
 impl core::clone::Clone for iceberg::transaction::RewriteDataFilesResult
 pub fn iceberg::transaction::RewriteDataFilesResult::clone(&self) -> iceberg::transaction::RewriteDataFilesResult
+pub struct iceberg::transaction::RowDeltaAction
+impl iceberg::transaction::RowDeltaAction
+pub fn iceberg::transaction::RowDeltaAction::add_data_files(self, files: impl core::iter::traits::collect::IntoIterator<Item = iceberg::spec::DataFile>) -> Self
+pub fn iceberg::transaction::RowDeltaAction::add_delete_files(self, files: impl core::iter::traits::collect::IntoIterator<Item = iceberg::spec::DataFile>) -> Self
+pub fn iceberg::transaction::RowDeltaAction::artifacts(&self) -> iceberg::io::ArtifactInventory
+pub async fn iceberg::transaction::RowDeltaAction::prepare(&self, table: &iceberg::table::Table) -> iceberg::Result<iceberg::transaction::PreparedRowDelta>
+pub fn iceberg::transaction::RowDeltaAction::with_cancellation(self, token: iceberg::io::CancellationToken) -> Self
+impl core::clone::Clone for iceberg::transaction::RowDeltaAction
+pub fn iceberg::transaction::RowDeltaAction::clone(&self) -> iceberg::transaction::RowDeltaAction
 pub struct iceberg::transaction::Transaction
 impl iceberg::transaction::Transaction
 pub async fn iceberg::transaction::Transaction::commit(self, catalog: &dyn iceberg::Catalog) -> iceberg::Result<iceberg::table::Table>
@@ -3540,6 +3557,7 @@ pub fn iceberg::transaction::Transaction::new(table: &iceberg::table::Table) -> 
 pub fn iceberg::transaction::Transaction::overwrite_files(&self) -> iceberg::transaction::OverwriteFilesAction
 pub fn iceberg::transaction::Transaction::replace_sort_order(&self) -> iceberg::transaction::ReplaceSortOrderAction
 pub fn iceberg::transaction::Transaction::rewrite_data_files(&self) -> iceberg::transaction::RewriteDataFilesAction
+pub fn iceberg::transaction::Transaction::row_delta(&self) -> iceberg::transaction::RowDeltaAction
 pub fn iceberg::transaction::Transaction::update_location(&self) -> iceberg::transaction::UpdateLocationAction
 pub fn iceberg::transaction::Transaction::update_schema(&self) -> iceberg::transaction::UpdateSchemaAction
 pub fn iceberg::transaction::Transaction::update_statistics(&self) -> iceberg::transaction::UpdateStatisticsAction

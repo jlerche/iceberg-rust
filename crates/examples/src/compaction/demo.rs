@@ -30,6 +30,9 @@ use iceberg::spec::{DataFile, DataFileFormat, NestedField, PrimitiveType, Schema
 use iceberg::table::Table;
 use iceberg::transaction::{ApplyTransactionAction, RewriteDataFilesResult, Transaction};
 use iceberg::writer::base_writer::data_file_writer::DataFileWriterBuilder;
+use iceberg::writer::base_writer::equality_delete_writer::{
+    EqualityDeleteFileWriterBuilder, EqualityDeleteWriterConfig,
+};
 use iceberg::writer::file_writer::ParquetWriterBuilder;
 use iceberg::writer::file_writer::location_generator::{
     DefaultFileNameGenerator, DefaultLocationGenerator,
@@ -95,6 +98,21 @@ impl Demo {
         table: &Table,
         values: &[Option<i32>],
     ) -> Result<(Table, Vec<DataFile>)> {
+        let files = Self::write(table, values, false).await?;
+        let tx = Transaction::new(table);
+        let appended = tx
+            .fast_append()
+            .add_data_files(files.clone())
+            .apply(tx)?
+            .commit(&self.catalog)
+            .await?;
+        Ok((appended, files))
+    }
+    pub async fn write(
+        table: &Table,
+        values: &[Option<i32>],
+        equality: bool,
+    ) -> Result<Vec<DataFile>> {
         let schema = table.metadata().current_schema().clone();
         let batch = RecordBatch::try_new(Arc::new(ArrowSchema::try_from(schema.as_ref())?), vec![
             Arc::new(values.iter().copied().collect::<Int32Array>()),
@@ -113,17 +131,21 @@ impl Demo {
                 DataFileFormat::Parquet,
             ),
         );
-        let mut writer = DataFileWriterBuilder::new(rolling).build(None).await?;
-        writer.write(batch).await?;
-        let files = writer.close().await?;
-        let tx = Transaction::new(table);
-        let appended = tx
-            .fast_append()
-            .add_data_files(files.clone())
-            .apply(tx)?
-            .commit(&self.catalog)
-            .await?;
-        Ok((appended, files))
+        if equality {
+            let config = EqualityDeleteWriterConfig::new(
+                vec![1],
+                table.metadata().current_schema().clone(),
+            )?;
+            let mut writer = EqualityDeleteFileWriterBuilder::new(rolling, config)
+                .build(None)
+                .await?;
+            writer.write(batch).await?;
+            writer.close().await
+        } else {
+            let mut writer = DataFileWriterBuilder::new(rolling).build(None).await?;
+            writer.write(batch).await?;
+            writer.close().await
+        }
     }
 }
 

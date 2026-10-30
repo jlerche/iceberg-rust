@@ -25,3 +25,7 @@ crates/iceberg/src/transaction/rewrite_data_files/tests/selection.rs
 crates/iceberg/src/transaction/rewrite_data_files/deletes.rs
 crates/iceberg/src/transaction/rewrite_data_files/tests/delete_fixture.rs
 crates/iceberg/src/transaction/rewrite_data_files/tests/deletes.rs
+crates/iceberg/src/transaction/row_delta.rs
+crates/iceberg/src/transaction/row_delta/prepared.rs
+crates/iceberg/src/transaction/row_delta/validation.rs
+crates/iceberg/src/transaction/rewrite_data_files/tests/row_delta.rs

@@ -603,3 +603,82 @@ async fn global_equality_deletes_span_old_and_new_partition_specs() -> Result<()
     assert_eq!(read_rows(&fresh, None).await?, expected);
     Ok(())
 }
+
+#[tokio::test]
+async fn row_delta_groups_new_data_and_global_deletes_by_their_actual_specs() -> Result<()> {
+    use super::delete_fixture::equality;
+    let mut fixture = Fixture::new().await?;
+    fixture.append(&[row(Some(1), Some("old"))]).await?;
+    evolve(&mut fixture).await?;
+    let key = PartitionKey::new(
+        fixture
+            .table
+            .metadata()
+            .default_partition_spec()
+            .as_ref()
+            .clone(),
+        fixture.table.metadata().current_schema().clone(),
+        partition(Some(1)),
+    );
+    let data =
+        write_partition_rows(&fixture.table, &[row(Some(1), Some("new"))], Some(key)).await?;
+    let deletes = equality(&fixture.table, &[Some(1)], None).await?;
+    let prepared = Transaction::new(&fixture.table)
+        .row_delta()
+        .add_data_files(data)
+        .add_delete_files(deletes)
+        .prepare(&fixture.table)
+        .await?;
+    let id = prepared.snapshot().snapshot_id();
+    let fresh = prepared.publish(&fixture.catalog).await?;
+    let mut groups = crate::transaction::snapshot::current_manifests(&fresh)
+        .await?
+        .into_iter()
+        .filter(|manifest| manifest.added_snapshot_id == id)
+        .map(|manifest| {
+            (
+                manifest.partition_spec_id,
+                manifest.content == crate::spec::ManifestContentType::Data,
+            )
+        })
+        .collect::<Vec<_>>();
+    groups.sort_unstable();
+    assert_eq!(
+        (read_rows(&fresh, None).await?, groups),
+        (vec![row(Some(1), Some("new"))], vec![(0, false), (1, true)])
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn row_delta_rejects_nonprimitive_partition_literals_without_panicking() -> Result<()> {
+    let fixture = fixture().await?;
+    let key = PartitionKey::new(
+        fixture
+            .table
+            .metadata()
+            .default_partition_spec()
+            .as_ref()
+            .clone(),
+        fixture.table.metadata().current_schema().clone(),
+        partition(Some(1)),
+    );
+    let data = write_partition_rows(&fixture.table, &[row(Some(1), None)], Some(key)).await?;
+    for literal in [Literal::List(vec![]), Literal::Struct(Struct::empty())] {
+        let mut files = data.clone();
+        files.first_mut().ok_or_else(missing)?.partition = Struct::from_iter([Some(literal)]);
+        let action = Transaction::new(&fixture.table)
+            .row_delta()
+            .add_data_files(files);
+        let error = action
+            .prepare(&fixture.table)
+            .await
+            .err()
+            .ok_or_else(missing)?;
+        assert_eq!(
+            (error.kind(), action.artifacts().paths()),
+            (ErrorKind::DataInvalid, vec![])
+        );
+    }
+    Ok(())
+}

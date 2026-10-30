@@ -35,7 +35,7 @@ pub struct PreparedRewriteDataFiles {
 }
 
 impl PreparedRewriteDataFiles {
-    pub(super) fn new(base: Table, mut action: ActionCommit) -> Result<Self> {
+    pub(in crate::transaction) fn new(base: Table, mut action: ActionCommit) -> Result<Self> {
         let updates = action.take_updates();
         let snapshot = updates
             .iter()
@@ -44,7 +44,7 @@ impl PreparedRewriteDataFiles {
                 _ => None,
             })
             .ok_or_else(|| {
-                Error::new(ErrorKind::Unexpected, "Prepared rewrite lacks a snapshot")
+                Error::new(ErrorKind::Unexpected, "Prepared mutation lacks a snapshot")
             })?;
         let commit = TableCommit::builder()
             .ident(base.identifier().clone())

@@ -205,6 +205,8 @@ External Postgres coordination stays with the downstream adapter.
 External-reader validation and broader maintenance features remain follow-ups,
 not prerequisites for trying the supported path in `icestream`. Total-plan
 admission limits for selected file count and source bytes are implemented.
+Atomic data/equality-delete publication is available through `RowDelta`, with
+standard prepared-commit handoff for downstream catalog coordination.
 Explicit-selection planning also retains only selected descriptor/sequence
 inventories, while preserving whole-table validation.
 
@@ -1417,6 +1419,12 @@ The work below describes the broader milestone, not a completed exit gate.
 
 ### Milestone J: `RowDelta`
 
+Delivered initial slice: v2/main Parquet data plus equality-delete
+publication against an unchanged base, standard prepared-commit handoff,
+transaction convenience, cancellation, and one-shot submission. Position-delete
+publication, broader isolation/rebase policies, and external-reader gates remain
+outside this first slice.
+
 #### Work
 
 1. Add standard row-delta actions for added data and equality/position-delete
@@ -2343,3 +2351,61 @@ Validation from parent `47e9ade08`, pinned toolchain, and unchanged Cargo.lock:
 External readers, REST/RustFS
 live-delete cases, v3/deletion vectors, and automatic delete retirement are not
 validated or delivered by this slice. The full Milestone I exit remains open.
+
+
+## Caller-controlled equality row deltas (2026-10-29)
+
+`Transaction::row_delta()` accepts caller-written
+Parquet data and equality-delete files, producing one atomic standard snapshot.
+Data-only payloads use `append`, delete-only payloads use `delete`, and mixed
+payloads use `overwrite`, matching the [Apache reference action](https://github.com/apache/iceberg/blob/main/core/src/main/java/org/apache/iceberg/BaseRowDelta.java).
+New data and deletes inherit the same commit sequence, so deletes affect older
+versions while preserving replacement rows committed alongside them.
+
+Preparation requires an unchanged table identity, metadata, and location. Any
+observed concurrent append, rewrite, metadata evolution, or delete requires a
+fresh action and caller reconsideration of its intent; no automatic rebase or
+predicate-isolation policy is added. Catalog head/schema/spec/sort requirements
+protect submission. A downstream adapter must atomically validate requirements
+and enforce the recorded full metadata base alongside external state.
+
+`RowDeltaAction::prepare(fresh_table)` returns `PreparedRowDelta`, exposing
+snapshot/base identity and a checked standard `TableCommit` handoff, or one-shot
+catalog publication. The transaction convenience path uses the same builder and
+protects allocated metadata on submission without retrying unknown outcomes.
+The prepared facade reuses existing one-shot publication machinery. Cancellation
+checks and retention follow the same contract as compaction.
+
+Validation checks format, content, duplicate/overlapping paths, collisions with
+all live data/delete paths, known specs and partition tuples, signed-format size
+and record ranges, and equality IDs via the existing writer configuration. Shared partition
+validation rejects nonprimitive literals as `DataInvalid`.
+Caller-written files remain immutable caller inputs; metadata inventories do not
+claim them. Callers must retain those file paths separately, finish writes,
+provide accurate descriptors, and resolve ambiguous outcomes before reuse or
+cleanup. Payload schema/metrics/bytes are not independently reread for validation.
+
+Position-delete publication, v1/v3, file removals, automatic cleanup, durable
+receipt storage, and broader transaction-isolation policies remain deferred.
+Validation from parent `1ea96142a`, pinned toolchain, and unchanged Cargo.lock:
+
+- Core library: 2,170 passed, one ignored. Eleven new targeted tests cover
+  nullable/composite keys followed by compaction, correct operation/sequence
+  assignment, strict-base append and prepared races, invalid IDs/descriptors,
+  live and duplicate path collisions across both contents, historical/global
+  specs, unsupported modes, cancellation, caller-file retention on metadata
+  failure, unknown outcomes through both publication paths, and nonprimitive
+  partition values.
+- Documentation: 90 passed, 14 ignored, including the new RowDelta public example.
+- The runnable example now passes four scenarios, including public RowDelta
+  handoff followed by delete-aware compaction. Its README documents the added
+  contract and caller-owned file responsibilities.
+- Default Clippy and `make check-fork-lints` passed, including formatting, ten
+  checker self-tests, and the 1,000-line gate for all thirty-one registered
+  fork-owned files. API generation and `make check-public-api` passed; growth is
+  limited to `RowDeltaAction`, `PreparedRowDelta`, and `Transaction::row_delta`.
+- Two independent reviewers reported no remaining findings and independently
+  ran all eleven targeted tests; one also ran the four-scenario example.
+
+Position-delete publication and external-reader/REST row-delta cases remain open.
+This does not complete the full Milestone J exit gate.

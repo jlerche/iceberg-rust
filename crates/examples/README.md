@@ -31,7 +31,7 @@ cargo run --locked -p iceberg-examples --example caller-controlled-compaction
 
 The executable checks exact rows, duplicate and null preservation, historical
 reads, and retained staged artifacts. It exits with an error or assertion failure
-if an expected outcome does not hold. Its three scenarios demonstrate:
+if an expected outcome does not hold. Its four scenarios demonstrate:
 
 1. Select two live file descriptors, execute without publishing, refresh the
    table, prepare snapshot metadata, and transfer the standard `TableCommit`
@@ -50,6 +50,19 @@ if an expected outcome does not hold. Its three scenarios demonstrate:
    After another append, finding the exact prepared snapshot in the same table's
    retained main ancestry establishes publication even though it is no longer
    the head. Missing evidence remains unknown, including after history expiration.
+
+4. Write replacement rows and equality deletes, prepare a `RowDelta`, and hand
+   off its standard commit. Both additions inherit the same sequence, preserving
+   same-commit replacements (including null keys). Compact the result and verify
+   the deleted old rows do not return. The caller chooses incoming rows and
+   delete keys; the library does not deduplicate the incoming batch.
+
+The initial `RowDelta` supports v2/main Parquet data and equality deletes. It
+requires an unchanged planning base, rejects position-delete publication, and
+never rebases or retries a submitted operation automatically. Its artifact
+inventory contains newly allocated metadata only: persist caller-written data
+and delete paths separately before handoff. Finish immutable writes and supply
+accurate descriptors; preparation does not inspect Parquet payload contents.
 
 The example prints a receipt before handoff: table identity and UUID, validated
 publication-base metadata location and snapshot, prepared snapshot identity and

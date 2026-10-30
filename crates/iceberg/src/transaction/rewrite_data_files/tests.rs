@@ -471,3 +471,5 @@ mod selection;
 
 mod delete_fixture;
 mod deletes;
+
+mod row_delta;

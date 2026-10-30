@@ -57,6 +57,7 @@ mod append;
 mod expire_snapshots;
 mod overwrite;
 mod rewrite_data_files;
+mod row_delta;
 mod snapshot;
 mod sort_order;
 mod update_location;
@@ -82,6 +83,7 @@ pub use crate::transaction::rewrite_data_files::{
     PreparedRewriteDataFiles, RewriteDataFilesAction, RewriteDataFilesGroup, RewriteDataFilesPlan,
     RewriteDataFilesResult,
 };
+pub use crate::transaction::row_delta::{PreparedRowDelta, RowDeltaAction};
 pub use crate::transaction::sort_order::ReplaceSortOrderAction;
 pub use crate::transaction::update_location::UpdateLocationAction;
 pub use crate::transaction::update_properties::UpdatePropertiesAction;
@@ -149,6 +151,11 @@ impl Transaction {
     /// Compacts the current table's data files without changing its rows.
     pub fn rewrite_data_files(&self) -> RewriteDataFilesAction {
         RewriteDataFilesAction::new(&self.table)
+    }
+
+    /// Adds caller-written data and equality-delete files atomically.
+    pub fn row_delta(&self) -> RowDeltaAction {
+        RowDeltaAction::new(&self.table)
     }
 
     /// Sets table to a new version.

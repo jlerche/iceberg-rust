@@ -284,11 +284,11 @@ impl TransactionAction for RewriteDataFilesAction {
     async fn cleanup(self, _state: Self::State, _table: &Table, _status: CommitStatus) {}
 }
 
-fn validate_base(base: &Table, table: &Table) -> Result<()> {
+pub(in crate::transaction) fn validate_base(base: &Table, table: &Table) -> Result<()> {
     if base.readonly() || table.readonly() {
         return Err(Error::new(
             ErrorKind::PreconditionFailed,
-            "Cannot compact a read-only table",
+            "Cannot modify a read-only table",
         ));
     }
     if base.identifier() != table.identifier()
@@ -297,7 +297,7 @@ fn validate_base(base: &Table, table: &Table) -> Result<()> {
     {
         return Err(Error::new(
             ErrorKind::PreconditionFailed,
-            "Compaction planning base changed; replan the rewrite",
+            "Table planning base changed; replan the mutation",
         ));
     }
     Ok(())
