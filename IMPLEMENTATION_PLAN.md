@@ -219,20 +219,20 @@ validation, cancellation, and conservative unknown-outcome handling. This is an
 initial integration boundary, not completion of milestones A–M or a production
 operations certification.
 
-The remaining work is a finite validation closeout, in this order:
+The finite validation closeout is complete:
 
-- [ ] Exercise the public `RowDelta` and compaction APIs together against the
+- [x] Exercise the public `RowDelta` and compaction APIs together against the
   disposable REST/RustFS fixture. Cover equality replacements and tombstones,
   canonical position deletes, same-commit sequence boundaries, retained history,
   and compaction without resurrection. Include a definitive stale-commit
   rejection and simulated lost success response for a row delta. Existing
   no-delete REST coverage does not establish these live-delete cases.
-- [ ] Read the Rust-published v2 tables with one independent Iceberg reader,
+- [x] Read the Rust-published v2 tables with one independent Iceberg reader,
   using the existing Spark fixture where practical. Check exact visible rows
   before and after compaction and retained historical snapshots for both delete
   types. Keep this a focused interoperability smoke suite; do not add another
   engine integration or a general benchmark framework.
-- [ ] Close any correctness failures, finalize the supported-contract/runbook
+- [x] Close any correctness failures, finalize the supported-contract/runbook
   documentation, and record the final tested commit and service/tool versions.
   Run affected core, catalog/storage integration, example, lint, and API checks
   locally, with independent sub-agent review before every commit. Record unrun
@@ -257,7 +257,43 @@ closeout.
 Baseline at `08cc794a9`: 2,183 core tests and 90 doc tests passed, as did the
 five-scenario example, strict/default Clippy, file-length checks, API consistency,
 and independent review. Live-delete REST/RustFS and external-reader acceptance
-items above remain pending; this baseline does not claim them as passes.
+was pending at that baseline; the closeout below establishes those passes.
+
+### Integration closeout validation (2026-10-29)
+
+The closeout revision containing this section is the pin for the initial
+icestream integration trial. Its parent is `40cf25b2f`; production implementation
+remains at `08cc794a9`. This revision adds acceptance tests and documentation,
+with no production or public-API changes. Scope is frozen at the supported
+contract above.
+
+- REST/RustFS rewrite suite: 12 passed; the Spark test is ignored in this ordinary
+  invocation and passed separately when explicitly enabled.
+- REST conflict integration test: 1 passed.
+- Independent Spark reader: both equality and position cases passed all eight
+  baseline, post-delta, post-compaction, and current row checks, plus snapshot
+  operation and main-reference checks. An independent sub-agent also ran this
+  test successfully and reviewed the final harness and runbook.
+- Five-scenario caller-controlled compaction example: all passed.
+- Strict fork Clippy, default integration Clippy, formatting, all 38 registered
+  Rust file-length checks, and the 10 linter tests passed. Workspace public-API
+  consistency passed with no snapshot changes.
+- Toolchain: `nightly-2026-04-16`, rustc `1.97.0-nightly (e8e4541ff 2026-04-15)`.
+  Services: REST fixture `1.10.1`, RustFS `1.0.3`, Spark `4.0.1`, and the Java
+  Iceberg reader `1.10.1` (`ccb8bc435062171e64bc8b7e5f56e6aed9c5b934`).
+
+Reproduction and fixture cleanup are in the
+[acceptance runbook](crates/integration_tests/tests/rewrite_compaction/README.md).
+The success-response loss is simulated after a real REST commit at the Catalog
+boundary; it is not a wire-level fault or a Postgres coordination test. The first
+Spark harness attempt stalled on Compose stdin forwarding; the verified harness
+passes its small fixture description as a process argument.
+
+The unchanged core/doc suites retain their `08cc794a9` baseline results above;
+they were not rerun for this test/documentation-only closeout. Full-workspace
+external-service matrices, production object-store qualification, and other
+reader engines were not run. No additional functionality is required in this
+fork before beginning the supported icestream integration trial.
 
 ### Caller-controlled compaction contract (2026-10-29)
 

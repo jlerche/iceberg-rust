@@ -48,3 +48,12 @@ mod faults;
 mod fixture;
 #[path = "rewrite_compaction/lifecycle.rs"]
 mod lifecycle;
+
+#[path = "rewrite_compaction/cases.rs"]
+mod cases;
+#[path = "rewrite_compaction/deletes.rs"]
+mod deletes;
+#[path = "rewrite_compaction/row_delta.rs"]
+mod row_delta;
+#[path = "rewrite_compaction/spark.rs"]
+mod spark;

@@ -32,3 +32,7 @@ crates/iceberg/src/transaction/rewrite_data_files/tests/row_delta.rs
 crates/iceberg/src/transaction/row_delta/positions.rs
 crates/iceberg/src/transaction/row_delta/position_schema.rs
 crates/iceberg/src/transaction/rewrite_data_files/tests/position_delta.rs
+crates/integration_tests/tests/rewrite_compaction/deletes.rs
+crates/integration_tests/tests/rewrite_compaction/cases.rs
+crates/integration_tests/tests/rewrite_compaction/row_delta.rs
+crates/integration_tests/tests/rewrite_compaction/spark.rs
