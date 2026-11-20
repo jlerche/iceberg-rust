@@ -161,8 +161,6 @@ impl RewriteDataFilesPlan {
             .base
             .scan()
             .with_concurrency_limit(1)
-            .with_data_file_concurrency_limit(1)
-            .with_manifest_entry_concurrency_limit(1)
             .build()?
             .plan_files()
             .await?

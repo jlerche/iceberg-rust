@@ -80,6 +80,7 @@ use futures::TryStreamExt;
 pub use plan::CowRewriteFile;
 pub use rewriter::{CowBatchRewrite, CowBatchRewriter};
 
+use crate::arrow::ArrowReaderOptions;
 use crate::expr::Predicate;
 use crate::scan::FileScanTaskStream;
 use crate::spec::{DataFile, PartitionKey};
@@ -273,7 +274,11 @@ impl<'a> CowRewriteBuilder<'a> {
             // candidates are fetched once per file.
             let mut reader_builder = self.table.reader_builder();
             if let Some(batch_size) = self.batch_size {
-                reader_builder = reader_builder.with_batch_size(batch_size);
+                reader_builder = reader_builder.with_options(
+                    ArrowReaderOptions::builder()
+                        .with_batch_size(batch_size)
+                        .build(),
+                );
             }
 
             let mut batches = reader_builder.build().read(tasks)?.stream();
@@ -482,6 +487,7 @@ mod tests {
     use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
     use tempfile::TempDir;
 
+    use crate::arrow::ArrowReaderOptions;
     use crate::cow_rewrite::{CowBatchRewrite, CowBatchRewriter, CowRewriteBuilder};
     use crate::io::LocalFsStorageFactory;
     use crate::memory::{MEMORY_CATALOG_WAREHOUSE, MemoryCatalog, MemoryCatalogBuilder};
@@ -862,7 +868,12 @@ mod tests {
         if let Some(snapshot_id) = snapshot_id {
             builder = builder.snapshot_id(snapshot_id);
         }
-        let batches: Vec<RecordBatch> = builder.build()?.to_arrow().await?.try_collect().await?;
+        let batches: Vec<RecordBatch> = builder
+            .build()?
+            .to_arrow(ArrowReaderOptions::default())
+            .await?
+            .try_collect()
+            .await?;
         let mut ids = vec![];
         for batch in batches {
             let column = batch

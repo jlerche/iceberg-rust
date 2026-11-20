@@ -25,6 +25,7 @@ use arrow_schema::Schema as ArrowSchema;
 use futures::TryStreamExt;
 use tempfile::TempDir;
 
+use crate::arrow::ArrowReaderOptions;
 use crate::cow_rewrite::writer::write_replacement_batches;
 use crate::io::LocalFsStorageFactory;
 use crate::memory::{MEMORY_CATALOG_WAREHOUSE, MemoryCatalog, MemoryCatalogBuilder};
@@ -135,7 +136,7 @@ async fn read_rows(table: &Table, snapshot_id: Option<i64>) -> Result<Vec<Row>> 
 }
 
 async fn read_scan_rows(scan: crate::scan::TableScan) -> Result<Vec<Row>> {
-    let mut stream = scan.to_arrow().await?;
+    let mut stream = scan.to_arrow(ArrowReaderOptions::default()).await?;
     let mut rows = vec![];
     while let Some(batch) = stream.try_next().await? {
         let ids = batch.column(0).as_primitive::<Int32Type>();

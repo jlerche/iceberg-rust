@@ -23,6 +23,7 @@ use arrow_array::types::Int32Type;
 use arrow_array::{Array, Int32Array, RecordBatch, StringArray};
 use arrow_schema::Schema as ArrowSchema;
 use futures::TryStreamExt;
+use iceberg::arrow::ArrowReaderOptions;
 use iceberg::io::CancellationToken;
 use iceberg::spec::{
     DataFile, DataFileFormat, Datum, Literal, ManifestEntryRef, NestedField, PartitionKey,
@@ -192,7 +193,13 @@ pub async fn read(table: &Table, snapshot: Option<i64>) -> Result<Vec<Row>> {
     if let Some(snapshot) = snapshot {
         builder = builder.snapshot_id(snapshot);
     }
-    decode(builder.build()?.to_arrow().await?).await
+    decode(
+        builder
+            .build()?
+            .to_arrow(ArrowReaderOptions::default())
+            .await?,
+    )
+    .await
 }
 
 pub async fn filtered(table: &Table, id: i32) -> Result<Vec<Row>> {
@@ -200,7 +207,7 @@ pub async fn filtered(table: &Table, id: i32) -> Result<Vec<Row>> {
         .scan()
         .with_filter(iceberg::expr::Reference::new("id").equal_to(Datum::int(id)))
         .build()?;
-    decode(scan.to_arrow().await?).await
+    decode(scan.to_arrow(ArrowReaderOptions::default()).await?).await
 }
 
 async fn decode(mut batches: iceberg::scan::ArrowRecordBatchStream) -> Result<Vec<Row>> {

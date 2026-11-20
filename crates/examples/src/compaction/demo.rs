@@ -24,6 +24,7 @@ use arrow_array::types::Int32Type;
 use arrow_array::{Array, Int32Array, Int64Array, RecordBatch, StringArray};
 use arrow_schema::Schema as ArrowSchema;
 use futures::TryStreamExt;
+use iceberg::arrow::ArrowReaderOptions;
 use iceberg::io::LocalFsStorageFactory;
 use iceberg::memory::{MEMORY_CATALOG_WAREHOUSE, MemoryCatalog, MemoryCatalogBuilder};
 use iceberg::spec::{DataFile, DataFileFormat, NestedField, PrimitiveType, Schema};
@@ -208,7 +209,10 @@ pub async fn rows(table: &Table, snapshot: Option<i64>) -> Result<Vec<Option<i32
     if let Some(id) = snapshot {
         scan = scan.snapshot_id(id);
     }
-    let mut stream = scan.build()?.to_arrow().await?;
+    let mut stream = scan
+        .build()?
+        .to_arrow(ArrowReaderOptions::default())
+        .await?;
     let mut rows = vec![];
     while let Some(batch) = stream.try_next().await? {
         let values = batch.column(0).as_primitive::<Int32Type>();

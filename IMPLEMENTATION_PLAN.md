@@ -2545,3 +2545,25 @@ public API snapshot changes. All five runnable scenarios passed.
 Optional row payloads, cross-spec
 position targets, v3/Puffin, external-reader/REST position cases, and automatic
 delete retirement remain open.
+
+## Upstream sync through `219078c9d` (2026-11-19)
+
+Merged 59 upstream commits, taking upstream's snapshot-summary and main-ref
+retention code in both conflict hunks. Fork rewrite planning uses the upstream
+manifest concurrency setting. Compaction sets its one-file read limit through
+`ArrowReaderOptions`, and COW retains its configured batch size. The example
+and integration fixtures use the updated scan API.
+
+- Core library: 2,374 passed, four ignored. Doctests: 95 passed, 14 ignored.
+- REST/RustFS: 12 compaction and row-delta cases and one append conflict case passed.
+- Spark read both equality-delete and position-delete snapshots and their
+  compacted successors. All five caller-controlled compaction example scenarios
+  passed.
+- Workspace Clippy and the strict fork lint gate passed. The fork gate also
+  passed formatting, ten checker self-tests, and the line limit for all 38
+  registered files.
+- Independent review covered the merge and compatibility fixes and found no
+  remaining actionable issues.
+- Generated all ten public API snapshots. They matched the merged snapshots,
+  including the retained fork API.
+- The full workspace test suite was not run.

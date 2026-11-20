@@ -22,6 +22,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use futures::TryStreamExt;
 
 use super::row_count;
+use crate::arrow::ArrowReaderOptions;
 use crate::cow_rewrite::writer::build_replacement_writer;
 use crate::scan::FileScanTaskStream;
 use crate::spec::{DataFile, PartitionKey, Struct};
@@ -80,7 +81,11 @@ impl RewriteDataFilesGroup {
         }));
         let mut batches = table
             .reader_builder()
-            .with_data_file_concurrency_limit(1)
+            .with_options(
+                ArrowReaderOptions::builder()
+                    .with_data_file_concurrency_limit(1)
+                    .build(),
+            )
             .build()
             .read(tasks)?
             .stream();
